@@ -15,13 +15,28 @@ fi
 
 API="https://graph.microsoft.com/v1.0/me"
 
+# Detect timezone: use OUTLOOK_TZ env var, or system timezone, or fallback to UTC
+if [ -n "$OUTLOOK_TZ" ]; then
+    TIMEZONE="$OUTLOOK_TZ"
+elif [ -f /etc/timezone ]; then
+    TIMEZONE=$(cat /etc/timezone)
+elif command -v timedatectl &> /dev/null; then
+    TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null)
+elif [ -L /etc/localtime ]; then
+    TIMEZONE=$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')
+else
+    # macOS fallback
+    TIMEZONE=$(ls -l /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+fi
+TIMEZONE="${TIMEZONE:-UTC}"
+
 case "$1" in
     events)
         # List upcoming events
         COUNT=${2:-10}
         curl -s "$API/calendar/events?\$top=$COUNT&\$orderby=start/dateTime%20desc&\$select=id,subject,start,end,location,isAllDay" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Prefer: outlook.timezone=\"Europe/Madrid\"" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, start: .value.start.dateTime[0:16], end: .value.end.dateTime[0:16], location: (.value.location.displayName // ""), id: .value.id[-20:]}'
+            -H "Prefer: outlook.timezone=\"$TIMEZONE\"" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, start: .value.start.dateTime[0:16], end: .value.end.dateTime[0:16], location: (.value.location.displayName // ""), id: .value.id[-20:]}'
         ;;
     
     today)
@@ -30,7 +45,7 @@ case "$1" in
         TODAY_END=$(date -u +"%Y-%m-%dT23:59:59Z")
         curl -s "$API/calendarView?startDateTime=$TODAY_START&endDateTime=$TODAY_END&\$orderby=start/dateTime&\$select=id,subject,start,end,location" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Prefer: outlook.timezone=\"Europe/Madrid\"" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, start: .value.start.dateTime[0:16], end: .value.end.dateTime[0:16], location: (.value.location.displayName // ""), id: .value.id[-20:]}) else {error: .error.message} end'
+            -H "Prefer: outlook.timezone=\"$TIMEZONE\"" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, start: .value.start.dateTime[0:16], end: .value.end.dateTime[0:16], location: (.value.location.displayName // ""), id: .value.id[-20:]}) else {error: .error.message} end'
         ;;
     
     week)
@@ -39,7 +54,7 @@ case "$1" in
         WEEK_END=$(date -u -d "+7 days" +"%Y-%m-%dT23:59:59Z" 2>/dev/null || date -u -v+7d +"%Y-%m-%dT23:59:59Z")
         curl -s "$API/calendarView?startDateTime=$WEEK_START&endDateTime=$WEEK_END&\$orderby=start/dateTime&\$select=id,subject,start,end,location,isAllDay" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Prefer: outlook.timezone=\"Europe/Madrid\"" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, start: .value.start.dateTime[0:16], end: .value.end.dateTime[0:16], location: (.value.location.displayName // ""), id: .value.id[-20:]}) else {error: .error.message} end'
+            -H "Prefer: outlook.timezone=\"$TIMEZONE\"" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, start: .value.start.dateTime[0:16], end: .value.end.dateTime[0:16], location: (.value.location.displayName // ""), id: .value.id[-20:]}) else {error: .error.message} end'
         ;;
     
     read)
@@ -55,7 +70,7 @@ case "$1" in
         
         curl -s "$API/calendar/events/$FULL_ID" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "Prefer: outlook.timezone=\"Europe/Madrid\"" | jq '{
+            -H "Prefer: outlook.timezone=\"$TIMEZONE\"" | jq '{
                 subject,
                 start: .start.dateTime,
                 end: .end.dateTime,
@@ -90,8 +105,8 @@ case "$1" in
             -H "Content-Type: application/json" \
             -d "{
                 \"subject\": \"$SUBJECT\",
-                \"start\": {\"dateTime\": \"$START\", \"timeZone\": \"Europe/Madrid\"},
-                \"end\": {\"dateTime\": \"$END\", \"timeZone\": \"Europe/Madrid\"}
+                \"start\": {\"dateTime\": \"$START\", \"timeZone\": \"$TIMEZONE\"},
+                \"end\": {\"dateTime\": \"$END\", \"timeZone\": \"$TIMEZONE\"}
                 $LOCATION_JSON
             }" | jq '{status: "event created", subject: .subject, start: .start.dateTime[0:16], end: .end.dateTime[0:16], id: .id[-20:]}'
         ;;
@@ -121,8 +136,8 @@ case "$1" in
             -H "Content-Type: application/json" \
             -d "{
                 \"subject\": \"$SUBJECT\",
-                \"start\": {\"dateTime\": \"$START\", \"timeZone\": \"Europe/Madrid\"},
-                \"end\": {\"dateTime\": \"$END\", \"timeZone\": \"Europe/Madrid\"}
+                \"start\": {\"dateTime\": \"$START\", \"timeZone\": \"$TIMEZONE\"},
+                \"end\": {\"dateTime\": \"$END\", \"timeZone\": \"$TIMEZONE\"}
             }" | jq '{status: "quick event created", subject: .subject, start: .start.dateTime[0:16], end: .end.dateTime[0:16], id: .id[-20:]}'
         ;;
     
@@ -176,10 +191,10 @@ case "$1" in
                 BODY="{\"location\": {\"displayName\": \"$VALUE\"}}"
                 ;;
             start)
-                BODY="{\"start\": {\"dateTime\": \"$VALUE\", \"timeZone\": \"Europe/Madrid\"}}"
+                BODY="{\"start\": {\"dateTime\": \"$VALUE\", \"timeZone\": \"$TIMEZONE\"}}"
                 ;;
             end)
-                BODY="{\"end\": {\"dateTime\": \"$VALUE\", \"timeZone\": \"Europe/Madrid\"}}"
+                BODY="{\"end\": {\"dateTime\": \"$VALUE\", \"timeZone\": \"$TIMEZONE\"}}"
                 ;;
             *)
                 echo "Unknown field: $FIELD"

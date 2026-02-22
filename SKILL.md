@@ -1,7 +1,7 @@
 ---
 name: outlook
 description: Read, search, and manage Outlook emails and calendar via Microsoft Graph API. Use when the user asks about emails, inbox, Outlook, Microsoft mail, calendar events, or scheduling.
-version: 1.3.1
+version: 1.3.2
 author: jotamed
 ---
 
@@ -204,6 +204,12 @@ Access tokens expire after ~1 hour. Refresh with:
 - Work/School accounts (Microsoft 365) - may require admin consent
 
 ## Changelog
+
+### v1.3.2
+- **Fixed**: Timezone no longer hardcoded to Europe/Madrid
+  - Auto-detects system timezone (macOS + Linux)
+  - Can override with `OUTLOOK_TZ` environment variable
+  - Falls back to UTC if detection fails
 
 ### v1.3.1
 - **Security**: Fixed path traversal vulnerability in `download` command
