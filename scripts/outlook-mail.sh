@@ -1,15 +1,31 @@
 #!/bin/bash
 # Outlook Mail Operations
-# Usage: outlook-mail.sh <command> [args]
+# Usage: outlook-mail.sh [--account NAME] <command> [args]
 
-CONFIG_DIR="$HOME/.outlook-mcp"
+BASE_DIR="$HOME/.outlook-mcp"
+
+# Parse --account flag
+ACCOUNT="${OUTLOOK_ACCOUNT:-default}"
+if [ "$1" = "--account" ] || [ "$1" = "-a" ]; then
+    ACCOUNT="$2"
+    shift 2
+fi
+
+# Migrate legacy config to "default" subdirectory
+if [ -f "$BASE_DIR/credentials.json" ] && [ ! -d "$BASE_DIR/default" ]; then
+    mkdir -p "$BASE_DIR/default"
+    mv "$BASE_DIR/config.json" "$BASE_DIR/default/" 2>/dev/null
+    mv "$BASE_DIR/credentials.json" "$BASE_DIR/default/" 2>/dev/null
+fi
+
+CONFIG_DIR="$BASE_DIR/$ACCOUNT"
 CREDS_FILE="$CONFIG_DIR/credentials.json"
 
 # Load token
 ACCESS_TOKEN=$(jq -r '.access_token' "$CREDS_FILE" 2>/dev/null)
 
 if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
-    echo "Error: No access token. Run setup first."
+    echo "Error: Account '$ACCOUNT' not configured. Run: outlook-setup.sh --account $ACCOUNT"
     exit 1
 fi
 

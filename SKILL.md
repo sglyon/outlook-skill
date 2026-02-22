@@ -1,7 +1,7 @@
 ---
 name: outlook
 description: Read, search, and manage Outlook emails and calendar via Microsoft Graph API. Use when the user asks about emails, inbox, Outlook, Microsoft mail, calendar events, or scheduling.
-version: 1.3.2
+version: 1.4.0
 author: jotamed
 ---
 
@@ -26,6 +26,47 @@ The setup script will:
 ## Manual Setup
 
 See `references/setup.md` for step-by-step manual configuration via Azure Portal.
+
+## Multiple Accounts
+
+You can connect multiple Outlook accounts (personal, work, etc.):
+
+### Setup additional accounts
+```bash
+./scripts/outlook-setup.sh --account work
+./scripts/outlook-setup.sh --account personal
+```
+
+### Use specific account
+```bash
+./scripts/outlook-mail.sh --account work inbox
+./scripts/outlook-calendar.sh --account personal today
+./scripts/outlook-token.sh --account work refresh
+```
+
+### Or use environment variable
+```bash
+export OUTLOOK_ACCOUNT=work
+./scripts/outlook-mail.sh inbox
+```
+
+### List configured accounts
+```bash
+./scripts/outlook-token.sh list
+```
+
+Credentials are stored separately:
+```
+~/.outlook-mcp/
+  default/
+    config.json
+    credentials.json
+  work/
+    config.json  
+    credentials.json
+```
+
+Existing single-account setups are auto-migrated to `default`.
 
 ## Usage
 
@@ -204,6 +245,13 @@ Access tokens expire after ~1 hour. Refresh with:
 - Work/School accounts (Microsoft 365) - may require admin consent
 
 ## Changelog
+
+### v1.4.0
+- **Feature**: Multi-account support
+  - Use `--account NAME` flag or `OUTLOOK_ACCOUNT` env var
+  - Setup additional accounts with `outlook-setup.sh --account work`
+  - List accounts with `outlook-token.sh list`
+  - Auto-migrates existing single-account setups to `default`
 
 ### v1.3.2
 - **Fixed**: Timezone no longer hardcoded to Europe/Madrid

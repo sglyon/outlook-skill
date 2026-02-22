@@ -1,15 +1,49 @@
 #!/bin/bash
 # Outlook Token Manager
-# Usage: outlook-token.sh [refresh|get|test]
+# Usage: outlook-token.sh [--account NAME] [refresh|get|test|list]
 
-CONFIG_DIR="$HOME/.outlook-mcp"
+BASE_DIR="$HOME/.outlook-mcp"
+
+# Parse --account flag
+ACCOUNT="${OUTLOOK_ACCOUNT:-default}"
+if [ "$1" = "--account" ] || [ "$1" = "-a" ]; then
+    ACCOUNT="$2"
+    shift 2
+fi
+
+# Handle 'list' command before checking config
+if [ "$1" = "list" ]; then
+    echo "Configured accounts:"
+    for dir in "$BASE_DIR"/*/; do
+        if [ -f "$dir/credentials.json" ]; then
+            name=$(basename "$dir")
+            echo "  - $name"
+        fi
+    done
+    exit 0
+fi
+
+# Migrate legacy config (no subdirectory) to "default"
+if [ -f "$BASE_DIR/credentials.json" ] && [ ! -d "$BASE_DIR/default" ]; then
+    mkdir -p "$BASE_DIR/default"
+    mv "$BASE_DIR/config.json" "$BASE_DIR/default/" 2>/dev/null
+    mv "$BASE_DIR/credentials.json" "$BASE_DIR/default/" 2>/dev/null
+    echo "Migrated existing config to 'default' account"
+fi
+
+CONFIG_DIR="$BASE_DIR/$ACCOUNT"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 CREDS_FILE="$CONFIG_DIR/credentials.json"
 
 # Check if config exists
 if [ ! -f "$CONFIG_FILE" ] || [ ! -f "$CREDS_FILE" ]; then
-    echo "Error: Outlook not configured. Run setup first."
-    echo "Missing: $CONFIG_FILE or $CREDS_FILE"
+    echo "Error: Account '$ACCOUNT' not configured."
+    echo "Run: outlook-setup.sh --account $ACCOUNT"
+    echo ""
+    echo "Available accounts:"
+    for dir in "$BASE_DIR"/*/; do
+        [ -f "$dir/credentials.json" ] && echo "  - $(basename "$dir")"
+    done
     exit 1
 fi
 
@@ -21,7 +55,7 @@ REFRESH_TOKEN=$(jq -r '.refresh_token' "$CREDS_FILE")
 
 case "$1" in
     refresh)
-        echo "Refreshing token..."
+        echo "Refreshing token for '$ACCOUNT'..."
         RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/common/oauth2/v2.0/token" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -d "client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET&refresh_token=$REFRESH_TOKEN&grant_type=refresh_token&scope=https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Calendars.ReadWrite offline_access")
@@ -41,7 +75,7 @@ case "$1" in
         ;;
     
     test)
-        echo "Testing connection..."
+        echo "Testing connection for '$ACCOUNT'..."
         RESULT=$(curl -s "https://graph.microsoft.com/v1.0/me/mailFolders/inbox" \
             -H "Authorization: Bearer $ACCESS_TOKEN")
         
@@ -50,16 +84,23 @@ case "$1" in
             UNREAD=$(echo "$RESULT" | jq '.unreadItemCount')
             echo "✓ Connected! Inbox: $TOTAL emails ($UNREAD unread)"
         else
-            echo "✗ Connection failed. Try: outlook-token.sh refresh"
+            echo "✗ Connection failed. Try: outlook-token.sh --account $ACCOUNT refresh"
             echo "$RESULT" | jq '.error.message // .'
             exit 1
         fi
         ;;
     
     *)
-        echo "Usage: outlook-token.sh [refresh|get|test]"
+        echo "Usage: outlook-token.sh [--account NAME] <command>"
+        echo ""
+        echo "Commands:"
         echo "  refresh - Refresh the access token"
         echo "  get     - Print current access token"
         echo "  test    - Test the connection"
+        echo "  list    - List configured accounts"
+        echo ""
+        echo "Options:"
+        echo "  --account, -a NAME  Use specific account (default: 'default')"
+        echo "  Or set OUTLOOK_ACCOUNT env var"
         ;;
 esac

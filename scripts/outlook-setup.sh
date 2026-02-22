@@ -4,11 +4,20 @@
 
 set -e
 
-CONFIG_DIR="$HOME/.outlook-mcp"
+BASE_DIR="$HOME/.outlook-mcp"
+
+# Parse --account flag
+ACCOUNT="${OUTLOOK_ACCOUNT:-default}"
+if [ "$1" = "--account" ] || [ "$1" = "-a" ]; then
+    ACCOUNT="$2"
+    shift 2
+fi
+
+CONFIG_DIR="$BASE_DIR/$ACCOUNT"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 CREDS_FILE="$CONFIG_DIR/credentials.json"
 
-APP_NAME="Clawdbot-Outlook"
+APP_NAME="Clawdbot-Outlook-$ACCOUNT"
 REDIRECT_URI="http://localhost"
 SCOPES="https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Calendars.ReadWrite offline_access"
 
@@ -20,6 +29,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}=== Outlook OAuth Setup ===${NC}"
+echo -e "Account: ${GREEN}$ACCOUNT${NC}"
 echo ""
 
 # Check prerequisites
