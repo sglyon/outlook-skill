@@ -415,7 +415,14 @@ case "$1" in
         CONTENT=$(curl -s "$API/messages/$FULL_ID/attachments/$ATT_ID" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r '.contentBytes')
         
-        OUTPUT_FILE="$OUTPUT/$ATT_NAME"
+        # Sanitize filename: strip path traversal sequences and extract basename only
+        SAFE_NAME=$(basename "$ATT_NAME" | sed 's/\.\.//g')
+        if [ -z "$SAFE_NAME" ] || [ "$SAFE_NAME" = "." ] || [ "$SAFE_NAME" = ".." ]; then
+            echo "{\"error\": \"Invalid attachment filename\"}"
+            exit 1
+        fi
+        
+        OUTPUT_FILE="$OUTPUT/$SAFE_NAME"
         echo "$CONTENT" | base64 -d > "$OUTPUT_FILE"
         
         if [ -f "$OUTPUT_FILE" ]; then

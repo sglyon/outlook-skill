@@ -1,7 +1,7 @@
 ---
 name: outlook
 description: Read, search, and manage Outlook emails and calendar via Microsoft Graph API. Use when the user asks about emails, inbox, Outlook, Microsoft mail, calendar events, or scheduling.
-version: 1.3.0
+version: 1.3.1
 author: jotamed
 ---
 
@@ -204,6 +204,12 @@ Access tokens expire after ~1 hour. Refresh with:
 - Work/School accounts (Microsoft 365) - may require admin consent
 
 ## Changelog
+
+### v1.3.1
+- **Security**: Fixed path traversal vulnerability in `download` command
+  - Attachment filenames are now sanitized using `basename` and stripped of `..` sequences
+  - Prevents malicious attachments from writing to arbitrary filesystem paths
+  - Reported by VirusTotal Code Insights
 
 ### v1.3.0
 - Added: **Calendar support** (`outlook-calendar.sh`)
