@@ -955,6 +955,860 @@ def categories() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mail action commands — management
+# ---------------------------------------------------------------------------
+
+
+@mail_app.command("mark-read")
+def mark_read(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """Mark a message as read."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.models.message import Message as MsgModel
+        body = MsgModel()
+        body.is_read = True
+        await client.me.messages.by_message_id(full_id).patch(body)
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to mark message as read: {exc}")
+
+    output_status({"status": "marked as read", "subject": "...", "id": full_id[-20:]})
+
+
+@mail_app.command("mark-unread")
+def mark_unread(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """Mark a message as unread."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.models.message import Message as MsgModel
+        body = MsgModel()
+        body.is_read = False
+        await client.me.messages.by_message_id(full_id).patch(body)
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to mark message as unread: {exc}")
+
+    output_status({"status": "marked as unread", "subject": "...", "id": full_id[-20:]})
+
+
+@mail_app.command("flag")
+def flag_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """Flag a message."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.models.message import Message as MsgModel
+        from msgraph.generated.models.followup_flag import FollowupFlag
+        from msgraph.generated.models.followup_flag_status import FollowupFlagStatus
+        body = MsgModel()
+        body.flag = FollowupFlag(flag_status=FollowupFlagStatus.Flagged)
+        await client.me.messages.by_message_id(full_id).patch(body)
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to flag message: {exc}")
+
+    output_status({"status": "flagged", "subject": "...", "id": full_id[-20:]})
+
+
+@mail_app.command("unflag")
+def unflag_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """Unflag a message."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.models.message import Message as MsgModel
+        from msgraph.generated.models.followup_flag import FollowupFlag
+        from msgraph.generated.models.followup_flag_status import FollowupFlagStatus
+        body = MsgModel()
+        body.flag = FollowupFlag(flag_status=FollowupFlagStatus.NotFlagged)
+        await client.me.messages.by_message_id(full_id).patch(body)
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to unflag message: {exc}")
+
+    output_status({"status": "unflagged", "subject": "...", "id": full_id[-20:]})
+
+
+@mail_app.command("delete")
+def delete_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """Move a message to trash."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.users.item.messages.item.move.move_post_request_body import MovePostRequestBody
+        body = MovePostRequestBody()
+        body.destination_id = "deleteditems"
+        await client.me.messages.by_message_id(full_id).move.post(body)
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to delete message: {exc}")
+
+    output_status({"status": "moved to trash", "subject": "...", "id": full_id[-20:]})
+
+
+@mail_app.command("archive")
+def archive_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """Move a message to archive."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.users.item.messages.item.move.move_post_request_body import MovePostRequestBody
+        body = MovePostRequestBody()
+        body.destination_id = "archive"
+        await client.me.messages.by_message_id(full_id).move.post(body)
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to archive message: {exc}")
+
+    output_status({"status": "archived", "subject": "...", "id": full_id[-20:]})
+
+
+@mail_app.command("move")
+def move_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+    folder: str = typer.Argument(..., help="Destination folder name"),
+) -> None:
+    """Move a message to a specific folder."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        # Look up folder by name (case-insensitive)
+        result = await client.me.mail_folders.get()
+        folder_id = None
+        folder_name = None
+        if result and result.value:
+            for f in result.value:
+                if f.display_name and f.display_name.lower() == folder.lower():
+                    folder_id = f.id
+                    folder_name = f.display_name
+                    break
+        if not folder_id:
+            raise ValueError(f"Folder '{folder}' not found.")
+        from msgraph.generated.users.item.messages.item.move.move_post_request_body import MovePostRequestBody
+        body = MovePostRequestBody()
+        body.destination_id = folder_id
+        await client.me.messages.by_message_id(full_id).move.post(body)
+        return full_id, folder_name
+
+    try:
+        full_id, folder_name = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to move message: {exc}")
+
+    output_status({"status": "moved", "folder": folder_name, "subject": "...", "id": full_id[-20:]})
+
+
+# ---------------------------------------------------------------------------
+# Mail action commands — sending
+# ---------------------------------------------------------------------------
+
+
+@mail_app.command("send")
+def send_msg(
+    to: str = typer.Argument(..., help="Recipient email address"),
+    subject: str = typer.Argument(..., help="Email subject"),
+    body: str = typer.Argument("", help="Email body text"),
+) -> None:
+    """Send a new email."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.send_mail.send_mail_post_request_body import SendMailPostRequestBody
+        from msgraph.generated.models.message import Message as MsgModel
+        from msgraph.generated.models.item_body import ItemBody
+        from msgraph.generated.models.body_type import BodyType
+        from msgraph.generated.models.recipient import Recipient
+        from msgraph.generated.models.email_address import EmailAddress
+
+        msg = MsgModel()
+        msg.subject = subject
+        msg.body = ItemBody(content_type=BodyType.Text, content=body)
+        msg.to_recipients = [Recipient(email_address=EmailAddress(address=to))]
+
+        send_body = SendMailPostRequestBody(message=msg)
+        await client.me.send_mail.post(send_body)
+
+    try:
+        asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to send message: {exc}")
+
+    output_status({"status": "sent", "to": to, "subject": subject})
+
+
+@mail_app.command("reply")
+def reply_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+    body: str = typer.Argument(..., help="Reply body text"),
+) -> None:
+    """Reply to a message."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.users.item.messages.item.reply.reply_post_request_body import ReplyPostRequestBody
+        reply_body = ReplyPostRequestBody()
+        reply_body.comment = body
+        await client.me.messages.by_message_id(full_id).reply.post(reply_body)
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to reply to message: {exc}")
+
+    output_status({"status": "reply sent", "id": full_id[-20:]})
+
+
+@mail_app.command("forward")
+def forward_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+    to: str = typer.Argument(..., help="Recipient email address"),
+    comment: str = typer.Argument("", help="Optional comment"),
+) -> None:
+    """Forward a message."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.users.item.messages.item.forward.forward_post_request_body import ForwardPostRequestBody
+        from msgraph.generated.models.recipient import Recipient
+        from msgraph.generated.models.email_address import EmailAddress
+        fwd_body = ForwardPostRequestBody()
+        fwd_body.comment = comment
+        fwd_body.to_recipients = [Recipient(email_address=EmailAddress(address=to))]
+        await client.me.messages.by_message_id(full_id).forward.post(fwd_body)
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to forward message: {exc}")
+
+    output_status({"status": "forwarded", "to": to, "id": full_id[-20:]})
+
+
+@mail_app.command("draft")
+def create_draft(
+    to: str = typer.Argument(..., help="Recipient email address"),
+    subject: str = typer.Argument(..., help="Email subject"),
+    body: str = typer.Argument("", help="Email body text"),
+) -> None:
+    """Create a draft message."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.models.message import Message as MsgModel
+        from msgraph.generated.models.item_body import ItemBody
+        from msgraph.generated.models.body_type import BodyType
+        from msgraph.generated.models.recipient import Recipient
+        from msgraph.generated.models.email_address import EmailAddress
+
+        msg = MsgModel()
+        msg.subject = subject
+        msg.body = ItemBody(content_type=BodyType.Text, content=body)
+        msg.to_recipients = [Recipient(email_address=EmailAddress(address=to))]
+        result = await client.me.messages.post(msg)
+        return result
+
+    try:
+        result = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to create draft: {exc}")
+
+    draft_id = (result.id or "")[-20:] if result else ""
+    output_status({"status": "draft created", "subject": subject, "to": to, "id": draft_id})
+
+
+@mail_app.command("drafts")
+def list_drafts(
+    count: int = typer.Option(10, "--count", "-n", help="Number of drafts"),
+) -> None:
+    """List draft messages."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.mail_folders.item.messages.messages_request_builder import MessagesRequestBuilder
+        query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "toRecipients", "createdDateTime"],
+            orderby=["createdDateTime desc"],
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+        )
+        result = await client.me.mail_folders.by_mail_folder_id("drafts").messages.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        messages = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch drafts: {exc}")
+
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        to_addr = ""
+        if msg.to_recipients:
+            addrs = [r.email_address.address for r in msg.to_recipients if r.email_address and r.email_address.address]
+            to_addr = ", ".join(addrs)
+        rows.append({
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "to": to_addr,
+            "date": str(msg.created_date_time)[:16] if msg.created_date_time else "",
+            "id": (msg.id or "")[-20:],
+        })
+
+    output_table("Drafts", [("n", "#"), ("subject", "Subject"), ("to", "To"), ("date", "Date"), ("id", "ID")], rows)
+
+
+@mail_app.command("send-draft")
+def send_draft(
+    id: str = typer.Argument(..., help="Draft message ID (or partial ID suffix)"),
+) -> None:
+    """Send an existing draft."""
+    client = get_graph_client()
+
+    async def _run():
+        # Resolve ID from drafts folder
+        from msgraph.generated.users.item.mail_folders.item.messages.messages_request_builder import MessagesRequestBuilder
+        query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=100,
+            select=["id"],
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+        )
+        result = await client.me.mail_folders.by_mail_folder_id("drafts").messages.get(request_configuration=config)
+        full_id = None
+        if result and result.value:
+            for msg in result.value:
+                if msg.id and msg.id.endswith(id):
+                    full_id = msg.id
+                    break
+        if not full_id:
+            raise ValueError(f"No draft found ending with '{id}'")
+        await client.me.messages.by_message_id(full_id).send.post()
+        return full_id
+
+    try:
+        full_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to send draft: {exc}")
+
+    output_status({"status": "draft sent", "id": full_id[-20:]})
+
+
+# ---------------------------------------------------------------------------
+# Mail action commands — categories
+# ---------------------------------------------------------------------------
+
+
+@mail_app.command("categorize")
+def categorize_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+    category: str = typer.Argument(..., help="Category to add"),
+) -> None:
+    """Add a category to a message."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.users.item.messages.item.message_item_request_builder import MessageItemRequestBuilder
+        from msgraph.generated.models.message import Message as MsgModel
+        # Get current categories
+        params = MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters(
+            select=["id", "subject", "categories"],
+        )
+        cfg = MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration(
+            query_parameters=params,
+        )
+        msg = await client.me.messages.by_message_id(full_id).get(request_configuration=cfg)
+        current_cats = list(msg.categories) if msg and msg.categories else []
+        if category not in current_cats:
+            current_cats.append(category)
+        body = MsgModel()
+        body.categories = current_cats
+        await client.me.messages.by_message_id(full_id).patch(body)
+        subject = msg.subject if msg else "..."
+        return full_id, subject, current_cats
+
+    try:
+        full_id, subject, cats = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to categorize message: {exc}")
+
+    output_status({"status": "categorized", "subject": subject, "categories": cats, "id": full_id[-20:]})
+
+
+@mail_app.command("uncategorize")
+def uncategorize_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """Remove all categories from a message."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, id)
+        from msgraph.generated.users.item.messages.item.message_item_request_builder import MessageItemRequestBuilder
+        from msgraph.generated.models.message import Message as MsgModel
+        params = MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters(
+            select=["id", "subject"],
+        )
+        cfg = MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration(
+            query_parameters=params,
+        )
+        msg = await client.me.messages.by_message_id(full_id).get(request_configuration=cfg)
+        body = MsgModel()
+        body.categories = []
+        await client.me.messages.by_message_id(full_id).patch(body)
+        subject = msg.subject if msg else "..."
+        return full_id, subject
+
+    try:
+        full_id, subject = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to uncategorize message: {exc}")
+
+    output_status({"status": "categories removed", "subject": subject, "id": full_id[-20:]})
+
+
+# ---------------------------------------------------------------------------
+# Mail action commands — folders
+# ---------------------------------------------------------------------------
+
+
+@mail_app.command("create-folder")
+def create_folder(
+    name: str = typer.Argument(..., help="Folder name"),
+    parent: str = typer.Option(None, "--parent", help="Parent folder name"),
+) -> None:
+    """Create a new mail folder."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.models.mail_folder import MailFolder
+        folder = MailFolder()
+        folder.display_name = name
+
+        if parent:
+            # Look up parent folder by name (case-insensitive)
+            result = await client.me.mail_folders.get()
+            parent_id = None
+            if result and result.value:
+                for f in result.value:
+                    if f.display_name and f.display_name.lower() == parent.lower():
+                        parent_id = f.id
+                        break
+            if not parent_id:
+                raise ValueError(f"Parent folder '{parent}' not found.")
+            created = await client.me.mail_folders.by_mail_folder_id(parent_id).child_folders.post(folder)
+        else:
+            created = await client.me.mail_folders.post(folder)
+        return created
+
+    try:
+        created = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to create folder: {exc}")
+
+    folder_id = (created.id or "")[-20:] if created else ""
+    output_status({"status": "folder created", "name": name, "id": folder_id})
+
+
+@mail_app.command("delete-folder")
+def delete_folder_cmd(
+    name: str = typer.Argument(..., help="Folder name to delete"),
+) -> None:
+    """Delete a mail folder."""
+    client = get_graph_client()
+
+    async def _run():
+        result = await client.me.mail_folders.get()
+        folder_id = None
+        if result and result.value:
+            for f in result.value:
+                if f.display_name and f.display_name.lower() == name.lower():
+                    folder_id = f.id
+                    break
+        if not folder_id:
+            raise ValueError(f"Folder '{name}' not found.")
+        await client.me.mail_folders.by_mail_folder_id(folder_id).delete()
+
+    try:
+        asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to delete folder: {exc}")
+
+    output_status({"status": "folder deleted", "name": name})
+
+
+# ---------------------------------------------------------------------------
+# Mail action commands — bulk operations
+# ---------------------------------------------------------------------------
+
+
+@mail_app.command("bulk-read")
+def bulk_read(
+    ids: list[str] = typer.Argument(..., help="Message IDs (or partial ID suffixes)"),
+) -> None:
+    """Mark multiple messages as read."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.models.message import Message as MsgModel
+        marked = 0
+        not_found = 0
+        for partial_id in ids:
+            try:
+                full_id = await _resolve_message_id(client, partial_id)
+                body = MsgModel()
+                body.is_read = True
+                await client.me.messages.by_message_id(full_id).patch(body)
+                marked += 1
+            except (ValueError, Exception):
+                not_found += 1
+        return marked, not_found
+
+    try:
+        marked, not_found = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Bulk read failed: {exc}")
+
+    output_status({"status": "bulk operation complete", "marked_read": marked, "not_found": not_found})
+
+
+@mail_app.command("bulk-delete")
+def bulk_delete(
+    ids: list[str] = typer.Argument(..., help="Message IDs (or partial ID suffixes)"),
+) -> None:
+    """Move multiple messages to trash."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.messages.item.move.move_post_request_body import MovePostRequestBody
+        deleted = 0
+        not_found = 0
+        for partial_id in ids:
+            try:
+                full_id = await _resolve_message_id(client, partial_id)
+                body = MovePostRequestBody()
+                body.destination_id = "deleteditems"
+                await client.me.messages.by_message_id(full_id).move.post(body)
+                deleted += 1
+            except (ValueError, Exception):
+                not_found += 1
+        return deleted, not_found
+
+    try:
+        deleted, not_found = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Bulk delete failed: {exc}")
+
+    output_status({"status": "bulk delete complete", "deleted": deleted, "not_found": not_found})
+
+
+# ---------------------------------------------------------------------------
+# Mail action commands — auto-categorize rules
+# ---------------------------------------------------------------------------
+
+
+def _rules_path() -> Path:
+    """Return the path to rules.json for the current account."""
+    return _account_dir(state.account) / "rules.json"
+
+
+def _load_rules() -> list[dict]:
+    """Load rules from rules.json."""
+    rp = _rules_path()
+    if not rp.exists():
+        return []
+    try:
+        data = json.loads(rp.read_text())
+        return data.get("rules", [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_rules(rules: list[dict]) -> None:
+    """Save rules to rules.json."""
+    rp = _rules_path()
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(json.dumps({"rules": rules}, indent=2) + "\n")
+
+
+@mail_app.command("rules")
+def list_rules() -> None:
+    """Display auto-categorize rules."""
+    rules = _load_rules()
+    rows = []
+    for i, rule in enumerate(rules):
+        rows.append({
+            "index": i,
+            "match": rule.get("match", ""),
+            "pattern": rule.get("pattern", ""),
+            "category": rule.get("category", ""),
+        })
+
+    output_table("Rules", [("index", "Index"), ("match", "Match"), ("pattern", "Pattern"), ("category", "Category")], rows)
+
+
+@mail_app.command("add-rule")
+def add_rule(
+    field: str = typer.Argument(..., help="Field to match: 'from' or 'subject'"),
+    pattern: str = typer.Argument(..., help="Pattern to match (case-insensitive)"),
+    category: str = typer.Argument(..., help="Category to apply"),
+) -> None:
+    """Add an auto-categorize rule."""
+    if field not in ("from", "subject"):
+        _error_exit("Field must be 'from' or 'subject'.")
+
+    rules = _load_rules()
+    rules.append({"match": field, "pattern": pattern, "category": category})
+    _save_rules(rules)
+
+    output_status({"status": "rule added", "match": field, "pattern": pattern, "category": category})
+
+
+@mail_app.command("remove-rule")
+def remove_rule(
+    index: int = typer.Argument(..., help="Rule index (0-based)"),
+) -> None:
+    """Remove an auto-categorize rule by index."""
+    rules = _load_rules()
+    if index < 0 or index >= len(rules):
+        _error_exit(f"Invalid rule index {index}. Valid range: 0-{len(rules) - 1}")
+
+    removed = rules.pop(index)
+    _save_rules(rules)
+
+    output_status({"status": "rule removed", "match": removed.get("match", ""), "pattern": removed.get("pattern", ""), "category": removed.get("category", "")})
+
+
+@mail_app.command("auto-categorize")
+def auto_categorize(
+    count: int = typer.Option(50, "--count", "-n", help="Number of messages to scan"),
+) -> None:
+    """Auto-categorize messages using rules."""
+    rules = _load_rules()
+    if not rules:
+        _error_exit("No rules defined. Use 'mail add-rule' to create rules.")
+
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
+        from msgraph.generated.models.message import Message as MsgModel
+
+        query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "from", "categories"],
+            orderby=["receivedDateTime desc"],
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+        )
+        result = await client.me.messages.get(request_configuration=config)
+        messages = result.value or []
+
+        scanned = 0
+        categorized = 0
+        no_match = 0
+        already_categorized = 0
+
+        for msg in messages:
+            scanned += 1
+            matched_category = None
+            from_addr = ""
+            if msg.from_ and msg.from_.email_address:
+                from_addr = msg.from_.email_address.address or ""
+            subj = msg.subject or ""
+            current_cats = list(msg.categories) if msg.categories else []
+
+            for rule in rules:
+                match_field = rule.get("match", "")
+                pat = rule.get("pattern", "").lower()
+                cat = rule.get("category", "")
+                if match_field == "from" and pat in from_addr.lower():
+                    matched_category = cat
+                    break
+                elif match_field == "subject" and pat in subj.lower():
+                    matched_category = cat
+                    break
+
+            if matched_category is None:
+                no_match += 1
+            elif matched_category in current_cats:
+                already_categorized += 1
+            else:
+                current_cats.append(matched_category)
+                body = MsgModel()
+                body.categories = current_cats
+                await client.me.messages.by_message_id(msg.id).patch(body)
+                categorized += 1
+
+        return scanned, categorized, no_match, already_categorized
+
+    try:
+        scanned, categorized, no_match, already_categorized = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Auto-categorize failed: {exc}")
+
+    output_status({
+        "status": "auto-categorize complete",
+        "scanned": scanned,
+        "categorized": categorized,
+        "no_match": no_match,
+        "already_categorized": already_categorized,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Mail action commands — attachment download
+# ---------------------------------------------------------------------------
+
+
+@mail_app.command("download")
+def download_attachment(
+    msg_id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+    attachment_name: str = typer.Argument(..., help="Attachment filename"),
+    output: str = typer.Option(None, "--output", "-o", help="Output file path"),
+) -> None:
+    """Download an attachment from a message."""
+    import base64
+
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_message_id(client, msg_id)
+        result = await client.me.messages.by_message_id(full_id).attachments.get()
+        atts = result.value or []
+        target = None
+        for att in atts:
+            if att.name and att.name == attachment_name:
+                target = att
+                break
+        if not target:
+            raise ValueError(f"Attachment '{attachment_name}' not found.")
+        return full_id, target
+
+    try:
+        full_id, target = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to download attachment: {exc}")
+
+    # Sanitize filename — basename only, strip path traversal
+    safe_name = os.path.basename(attachment_name)
+    if not safe_name:
+        _error_exit("Invalid attachment filename.")
+
+    if output:
+        out_path = Path(output)
+    else:
+        out_path = Path.cwd() / safe_name
+
+    # Validate output directory exists
+    if not out_path.parent.exists():
+        _error_exit(f"Output directory '{out_path.parent}' does not exist.")
+
+    # Decode and save content
+    content_bytes = getattr(target, "content_bytes", None)
+    if content_bytes is None:
+        _error_exit("Attachment has no downloadable content.")
+
+    if isinstance(content_bytes, str):
+        file_data = base64.b64decode(content_bytes)
+    elif isinstance(content_bytes, bytes):
+        file_data = content_bytes
+    else:
+        file_data = base64.b64decode(str(content_bytes))
+
+    out_path.write_bytes(file_data)
+    output_status({"status": "downloaded", "file": str(out_path), "size": len(file_data)})
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
