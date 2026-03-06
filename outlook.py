@@ -1813,6 +1813,487 @@ def download_attachment(
 
 
 # ---------------------------------------------------------------------------
+# Calendar commands
+# ---------------------------------------------------------------------------
+
+EVENT_COLUMNS = [
+    ("n", "#"),
+    ("subject", "Subject"),
+    ("start", "Start"),
+    ("end", "End"),
+    ("location", "Location"),
+    ("id", "ID"),
+]
+
+
+def _format_event_rows(events) -> list[dict]:
+    """Format Graph SDK event objects into output rows."""
+    rows = []
+    for i, ev in enumerate(events, 1):
+        start_str = ""
+        if ev.start and ev.start.date_time:
+            start_str = ev.start.date_time[:16]
+        end_str = ""
+        if ev.end and ev.end.date_time:
+            end_str = ev.end.date_time[:16]
+        loc = ""
+        if ev.location and ev.location.display_name:
+            loc = ev.location.display_name
+        rows.append({
+            "n": i,
+            "subject": ev.subject or "(no subject)",
+            "start": start_str,
+            "end": end_str,
+            "location": loc,
+            "id": (ev.id or "")[-20:],
+        })
+    return rows
+
+
+@calendar_app.command()
+def events(
+    count: int = typer.Option(10, "--count", "-n", help="Number of events"),
+) -> None:
+    """List recent calendar events."""
+    client = get_graph_client()
+    tz = detect_timezone()
+
+    async def _run():
+        from msgraph.generated.users.item.events.events_request_builder import EventsRequestBuilder
+
+        query = EventsRequestBuilder.EventsRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "start", "end", "location", "isAllDay"],
+            orderby=["start/dateTime desc"],
+        )
+        config = EventsRequestBuilder.EventsRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+            headers={"Prefer": f'outlook.timezone="{tz}"'},
+        )
+        result = await client.me.events.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        evts = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch events: {exc}")
+
+    output_table("Calendar Events", EVENT_COLUMNS, _format_event_rows(evts))
+
+
+@calendar_app.command()
+def today() -> None:
+    """List today's calendar events."""
+    client = get_graph_client()
+    tz = detect_timezone()
+    from datetime import datetime as _dt
+
+    now = _dt.now()
+    start_iso = now.strftime("%Y-%m-%dT00:00:00Z")
+    end_iso = now.strftime("%Y-%m-%dT23:59:59Z")
+
+    async def _run():
+        from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import CalendarViewRequestBuilder
+
+        query = CalendarViewRequestBuilder.CalendarViewRequestBuilderGetQueryParameters(
+            start_date_time=start_iso,
+            end_date_time=end_iso,
+            select=["id", "subject", "start", "end", "location", "isAllDay"],
+            orderby=["start/dateTime"],
+        )
+        config = CalendarViewRequestBuilder.CalendarViewRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+            headers={"Prefer": f'outlook.timezone="{tz}"'},
+        )
+        result = await client.me.calendar_view.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        evts = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch today's events: {exc}")
+
+    output_table("Today's Events", EVENT_COLUMNS, _format_event_rows(evts))
+
+
+@calendar_app.command()
+def week() -> None:
+    """List this week's calendar events (next 7 days)."""
+    client = get_graph_client()
+    tz = detect_timezone()
+    from datetime import datetime as _dt, timedelta
+
+    now = _dt.now()
+    start_iso = now.strftime("%Y-%m-%dT00:00:00Z")
+    end_dt = now + timedelta(days=7)
+    end_iso = end_dt.strftime("%Y-%m-%dT23:59:59Z")
+
+    async def _run():
+        from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import CalendarViewRequestBuilder
+
+        query = CalendarViewRequestBuilder.CalendarViewRequestBuilderGetQueryParameters(
+            start_date_time=start_iso,
+            end_date_time=end_iso,
+            select=["id", "subject", "start", "end", "location", "isAllDay"],
+            orderby=["start/dateTime"],
+        )
+        config = CalendarViewRequestBuilder.CalendarViewRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+            headers={"Prefer": f'outlook.timezone="{tz}"'},
+        )
+        result = await client.me.calendar_view.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        evts = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch week's events: {exc}")
+
+    output_table("This Week's Events", EVENT_COLUMNS, _format_event_rows(evts))
+
+
+@calendar_app.command()
+def read(
+    event_id: str = typer.Argument(..., help="Event ID (or partial suffix)"),
+) -> None:
+    """Read full details of a calendar event."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_event_id(client, event_id)
+        ev = await client.me.events.by_event_id(full_id).get()
+        return ev
+
+    try:
+        ev = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to read event: {exc}")
+
+    start_str = ev.start.date_time[:16] if ev.start and ev.start.date_time else ""
+    end_str = ev.end.date_time[:16] if ev.end and ev.end.date_time else ""
+    loc = ev.location.display_name if ev.location and ev.location.display_name else ""
+    body_text = ""
+    if ev.body and ev.body.content:
+        body_text = strip_html(ev.body.content)[:500]
+    attendees_list = []
+    if ev.attendees:
+        for att in ev.attendees:
+            if att.email_address and att.email_address.address:
+                attendees_list.append(att.email_address.address)
+    join_url = ""
+    if ev.online_meeting_url:
+        join_url = ev.online_meeting_url
+    elif ev.online_meeting and hasattr(ev.online_meeting, "join_url") and ev.online_meeting.join_url:
+        join_url = ev.online_meeting.join_url
+
+    output_detail({
+        "subject": ev.subject or "",
+        "start": start_str,
+        "end": end_str,
+        "location": loc,
+        "body": body_text,
+        "attendees": ", ".join(attendees_list) if attendees_list else "",
+        "isOnline": getattr(ev, "is_online_meeting", False),
+        "link": join_url,
+    })
+
+
+@calendar_app.command()
+def calendars() -> None:
+    """List all calendars."""
+    client = get_graph_client()
+
+    async def _run():
+        result = await client.me.calendars.get()
+        return result.value or []
+
+    try:
+        cals = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to list calendars: {exc}")
+
+    cal_columns = [("name", "Name"), ("color", "Color"), ("canEdit", "Can Edit"), ("id", "ID")]
+    rows = []
+    for cal in cals:
+        rows.append({
+            "name": cal.name or "",
+            "color": str(cal.color) if cal.color else "",
+            "canEdit": getattr(cal, "can_edit", ""),
+            "id": (cal.id or "")[-20:],
+        })
+    output_table("Calendars", cal_columns, rows)
+
+
+@calendar_app.command()
+def free(
+    start: str = typer.Argument(..., help="Start datetime (ISO format)"),
+    end: str = typer.Argument(..., help="End datetime (ISO format)"),
+) -> None:
+    """Check free/busy status for a time range."""
+    client = get_graph_client()
+    tz = detect_timezone()
+
+    async def _run():
+        from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import CalendarViewRequestBuilder
+
+        query = CalendarViewRequestBuilder.CalendarViewRequestBuilderGetQueryParameters(
+            start_date_time=start,
+            end_date_time=end,
+            select=["id", "subject", "start", "end"],
+            orderby=["start/dateTime"],
+        )
+        config = CalendarViewRequestBuilder.CalendarViewRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+            headers={"Prefer": f'outlook.timezone="{tz}"'},
+        )
+        result = await client.me.calendar_view.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        evts = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to check free/busy: {exc}")
+
+    if not evts:
+        output_status({"status": "free", "start": start, "end": end})
+    else:
+        subjects = [ev.subject or "(no subject)" for ev in evts]
+        output_status({"status": "busy", "events": subjects})
+
+
+@calendar_app.command()
+def create(
+    subject: str = typer.Argument(..., help="Event subject"),
+    start: str = typer.Argument(..., help="Start datetime (ISO format)"),
+    end: str = typer.Argument(..., help="End datetime (ISO format)"),
+    location: str = typer.Option(None, "--location", "-l", help="Event location"),
+) -> None:
+    """Create a new calendar event."""
+    client = get_graph_client()
+    tz = detect_timezone()
+
+    async def _run():
+        from msgraph.generated.models.event import Event
+        from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
+        from msgraph.generated.models.location import Location as LocationModel
+
+        event = Event()
+        event.subject = subject
+        event.start = DateTimeTimeZone(date_time=start, time_zone=tz)
+        event.end = DateTimeTimeZone(date_time=end, time_zone=tz)
+        if location:
+            event.location = LocationModel(display_name=location)
+        result = await client.me.events.post(event)
+        return result
+
+    try:
+        ev = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to create event: {exc}")
+
+    start_str = ev.start.date_time[:16] if ev.start and ev.start.date_time else start
+    end_str = ev.end.date_time[:16] if ev.end and ev.end.date_time else end
+    output_status({
+        "status": "event created",
+        "subject": ev.subject or subject,
+        "start": start_str,
+        "end": end_str,
+        "id": ev.id or "",
+    })
+
+
+@calendar_app.command()
+def quick(
+    subject: str = typer.Argument(..., help="Event subject"),
+    start_time: str = typer.Option(None, "--start", "-s", help="Start datetime (ISO format, default: now)"),
+) -> None:
+    """Create a quick 1-hour event."""
+    client = get_graph_client()
+    tz = detect_timezone()
+    from datetime import datetime as _dt, timedelta
+
+    if start_time:
+        start_dt = _dt.fromisoformat(start_time)
+    else:
+        start_dt = _dt.now()
+    end_dt = start_dt + timedelta(hours=1)
+    start_str = start_dt.strftime("%Y-%m-%dT%H:%M")
+    end_str = end_dt.strftime("%Y-%m-%dT%H:%M")
+
+    async def _run():
+        from msgraph.generated.models.event import Event
+        from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
+
+        event = Event()
+        event.subject = subject
+        event.start = DateTimeTimeZone(date_time=start_str, time_zone=tz)
+        event.end = DateTimeTimeZone(date_time=end_str, time_zone=tz)
+        result = await client.me.events.post(event)
+        return result
+
+    try:
+        ev = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to create quick event: {exc}")
+
+    output_status({
+        "status": "quick event created",
+        "subject": ev.subject or subject,
+        "start": start_str,
+        "end": end_str,
+        "id": ev.id or "",
+    })
+
+
+@calendar_app.command()
+def update(
+    event_id: str = typer.Argument(..., help="Event ID (or partial suffix)"),
+    field: str = typer.Argument(..., help="Field to update (subject, location, start, end)"),
+    value: str = typer.Argument(..., help="New value"),
+) -> None:
+    """Update a field on an existing calendar event."""
+    client = get_graph_client()
+    tz = detect_timezone()
+    valid_fields = {"subject", "location", "start", "end"}
+    if field not in valid_fields:
+        _error_exit(f"Invalid field '{field}'. Valid fields: {', '.join(sorted(valid_fields))}")
+
+    async def _run():
+        from msgraph.generated.models.event import Event
+        from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
+        from msgraph.generated.models.location import Location as LocationModel
+
+        full_id = await _resolve_event_id(client, event_id)
+        event = Event()
+        if field == "subject":
+            event.subject = value
+        elif field == "location":
+            event.location = LocationModel(display_name=value)
+        elif field == "start":
+            event.start = DateTimeTimeZone(date_time=value, time_zone=tz)
+        elif field == "end":
+            event.end = DateTimeTimeZone(date_time=value, time_zone=tz)
+        result = await client.me.events.by_event_id(full_id).patch(event)
+        return result
+
+    try:
+        ev = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to update event: {exc}")
+
+    start_str = ev.start.date_time[:16] if ev.start and ev.start.date_time else ""
+    end_str = ev.end.date_time[:16] if ev.end and ev.end.date_time else ""
+    output_status({
+        "status": "event updated",
+        "subject": ev.subject or "",
+        "start": start_str,
+        "end": end_str,
+        "id": ev.id or "",
+    })
+
+
+@calendar_app.command()
+def delete(
+    event_id: str = typer.Argument(..., help="Event ID (or partial suffix)"),
+) -> None:
+    """Delete a calendar event."""
+    client = get_graph_client()
+
+    async def _run():
+        full_id = await _resolve_event_id(client, event_id)
+        await client.me.events.by_event_id(full_id).delete()
+        return full_id
+
+    try:
+        deleted_id = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to delete event: {exc}")
+
+    output_status({"status": "event deleted", "id": deleted_id})
+
+
+# ---------------------------------------------------------------------------
+# Token commands (refresh, get, list)
+# ---------------------------------------------------------------------------
+
+
+@token_app.command()
+def refresh() -> None:
+    """Force a token refresh."""
+    acct = state.account
+    try:
+        config = load_config(acct)
+        client_id = config.get("client_id")
+        if not client_id:
+            _error_exit(f"No client_id in config for account '{acct}'.")
+        cache_path = _account_dir(acct) / "token_cache.json"
+        credential = MsalTokenCredential(client_id, cache_path)
+        credential.get_token("https://graph.microsoft.com/.default")
+        output_status({"status": "ok", "message": "Token refreshed successfully"})
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Token refresh failed: {exc}")
+
+
+@token_app.command()
+def get() -> None:
+    """Print the current access token."""
+    acct = state.account
+    try:
+        config = load_config(acct)
+        client_id = config.get("client_id")
+        if not client_id:
+            _error_exit(f"No client_id in config for account '{acct}'.")
+        cache_path = _account_dir(acct) / "token_cache.json"
+        credential = MsalTokenCredential(client_id, cache_path)
+        token = credential.get_token("https://graph.microsoft.com/.default")
+        print(token.token)
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to get token: {exc}")
+
+
+@token_app.command(name="list")
+def list_accounts() -> None:
+    """List configured accounts."""
+    if not BASE_DIR.exists():
+        output_table("Accounts", [("account", "Account"), ("has_token", "Has Token")], [])
+        return
+
+    rows = []
+    for entry in sorted(BASE_DIR.iterdir()):
+        if entry.is_dir() and (entry / "config.json").exists():
+            has_token = (entry / "token_cache.json").exists()
+            rows.append({
+                "account": entry.name,
+                "has_token": str(has_token),
+            })
+    output_table("Accounts", [("account", "Account"), ("has_token", "Has Token")], rows)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
