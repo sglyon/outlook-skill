@@ -18,8 +18,27 @@ if [ -f "$BASE_DIR/credentials.json" ] && [ ! -d "$BASE_DIR/default" ]; then
     mv "$BASE_DIR/credentials.json" "$BASE_DIR/default/" 2>/dev/null
 fi
 
+# Validate account name to prevent directory traversal
+if [[ ! "$ACCOUNT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: Invalid account name '$ACCOUNT'. Use only letters, numbers, hyphens, and underscores."
+    exit 1
+fi
+
 CONFIG_DIR="$BASE_DIR/$ACCOUNT"
 CREDS_FILE="$CONFIG_DIR/credentials.json"
+
+# Validate count parameter is a positive integer
+validate_count() {
+    local val="$1"
+    local default="$2"
+    if [ -z "$val" ]; then
+        echo "$default"
+    elif [[ "$val" =~ ^[0-9]+$ ]]; then
+        echo "$val"
+    else
+        echo "$default"
+    fi
+}
 
 # Load token
 ACCESS_TOKEN=$(jq -r '.access_token' "$CREDS_FILE" 2>/dev/null)
@@ -34,22 +53,22 @@ API="https://graph.microsoft.com/v1.0/me"
 case "$1" in
     inbox)
         # List inbox messages
-        COUNT=${2:-10}
+        COUNT=$(validate_count "${2:-}" 10)
         curl -s "$API/messages?\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,receivedDateTime,isRead" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], read: .value.isRead, id: .value.id[-20:]}'
         ;;
     
     unread)
         # List unread messages
-        COUNT=${2:-20}
+        COUNT=$(validate_count "${2:-}" 20)
         curl -s "$API/messages?\$filter=isRead%20eq%20false&\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,receivedDateTime" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}'
         ;;
     
     search)
         # Search emails
-        QUERY="$2"
-        COUNT=${3:-20}
+        QUERY=$(jq -rn --arg q "$2" '$q | @uri')
+        COUNT=$(validate_count "${3:-}" 20)
         curl -s "$API/messages?\$search=\"$QUERY\"&\$top=$COUNT&\$select=id,subject,from,receivedDateTime" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}'
         ;;
@@ -59,7 +78,7 @@ case "$1" in
         MSG_ID="$2"
         # First find full ID (search by suffix)
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found. Use the ID shown in inbox/unread/search results."
@@ -81,7 +100,7 @@ case "$1" in
         # Mark message as read
         MSG_ID="$2"
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -117,20 +136,17 @@ case "$1" in
             exit 1
         fi
         
+        JSON_PAYLOAD=$(jq -n --arg subj "$SUBJECT" --arg body "$BODY" --arg to "$TO" \
+            '{message: {subject: $subj, body: {contentType: "Text", content: $body}, toRecipients: [{emailAddress: {address: $to}}]}}')
+
         RESULT=$(curl -s -w "\n%{http_code}" -X POST "$API/sendMail" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{
-                \"message\": {
-                    \"subject\": \"$SUBJECT\",
-                    \"body\": {\"contentType\": \"Text\", \"content\": \"$BODY\"},
-                    \"toRecipients\": [{\"emailAddress\": {\"address\": \"$TO\"}}]
-                }
-            }")
+            -d "$JSON_PAYLOAD")
         
         HTTP_CODE=$(echo "$RESULT" | tail -1)
         if [ "$HTTP_CODE" = "202" ]; then
-            echo "{\"status\": \"sent\", \"to\": \"$TO\", \"subject\": \"$SUBJECT\"}"
+            jq -n --arg to "$TO" --arg subj "$SUBJECT" '{status: "sent", to: $to, subject: $subj}'
         else
             echo "$RESULT" | head -n -1 | jq '.error // .'
         fi
@@ -140,7 +156,7 @@ case "$1" in
         # Mark message as unread
         MSG_ID="$2"
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -157,7 +173,7 @@ case "$1" in
         # Move message to trash
         MSG_ID="$2"
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -174,7 +190,7 @@ case "$1" in
         # Move message to archive
         MSG_ID="$2"
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -191,7 +207,7 @@ case "$1" in
         # Flag message as important
         MSG_ID="$2"
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -208,7 +224,7 @@ case "$1" in
         # Remove flag from message
         MSG_ID="$2"
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -223,8 +239,8 @@ case "$1" in
     
     from)
         # List emails from specific sender (uses search - more reliable than filter)
-        SENDER="$2"
-        COUNT=${3:-20}
+        SENDER=$(jq -rn --arg s "$2" '$s | @uri')
+        COUNT=$(validate_count "${3:-}" 20)
         curl -s "$API/messages?\$search=\"from:$SENDER\"&\$top=$COUNT&\$select=id,subject,from,receivedDateTime,isRead" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], read: .value.isRead, id: .value.id[-20:]}) else {error: .error.message} end'
         ;;
@@ -233,7 +249,7 @@ case "$1" in
         # List attachments for a message
         MSG_ID="$2"
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -250,7 +266,7 @@ case "$1" in
         BODY="$3"
         
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -260,11 +276,11 @@ case "$1" in
         RESULT=$(curl -s -w "\n%{http_code}" -X POST "$API/messages/$FULL_ID/reply" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"comment\": \"$BODY\"}")
+            -d "$(jq -n --arg c "$BODY" '{comment: $c}')")
         
         HTTP_CODE=$(echo "$RESULT" | tail -1)
         if [ "$HTTP_CODE" = "202" ]; then
-            echo "{\"status\": \"reply sent\", \"id\": \"$MSG_ID\"}"
+            jq -n --arg id "$MSG_ID" '{status: "reply sent", id: $id}'
         else
             echo "$RESULT" | head -n -1 | jq '.error // .'
         fi
@@ -282,7 +298,7 @@ case "$1" in
         fi
         
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -292,7 +308,7 @@ case "$1" in
         # Get folder ID by name (case-insensitive)
         FOLDER_LOWER=$(echo "$FOLDER" | tr '[:upper:]' '[:lower:]')
         FOLDER_ID=$(curl -s "$API/mailFolders" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select((.displayName | ascii_downcase) == \"$FOLDER_LOWER\") | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg fn "$FOLDER_LOWER" '.value[] | select((.displayName | ascii_downcase) == $fn) | .id' | head -1)
         
         if [ -z "$FOLDER_ID" ]; then
             echo "Folder not found: $FOLDER"
@@ -304,7 +320,7 @@ case "$1" in
         curl -s -X POST "$API/messages/$FULL_ID/move" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"destinationId\": \"$FOLDER_ID\"}" | jq '{status: "moved", folder: "'"$FOLDER"'", subject: .subject, id: .id[-20:]}'
+            -d "{\"destinationId\": \"$FOLDER_ID\"}" | jq --arg f "$FOLDER" '{status: "moved", folder: $f, subject: .subject, id: .id[-20:]}'
         ;;
     
     draft)
@@ -318,19 +334,18 @@ case "$1" in
             exit 1
         fi
         
+        JSON_PAYLOAD=$(jq -n --arg subj "$SUBJECT" --arg body "$BODY" --arg to "$TO" \
+            '{subject: $subj, body: {contentType: "Text", content: $body}, toRecipients: [{emailAddress: {address: $to}}]}')
+
         curl -s -X POST "$API/messages" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{
-                \"subject\": \"$SUBJECT\",
-                \"body\": {\"contentType\": \"Text\", \"content\": \"$BODY\"},
-                \"toRecipients\": [{\"emailAddress\": {\"address\": \"$TO\"}}]
-            }" | jq '{status: "draft created", subject: .subject, to: .toRecipients[0].emailAddress.address, id: .id[-20:]}'
+            -d "$JSON_PAYLOAD" | jq '{status: "draft created", subject: .subject, to: .toRecipients[0].emailAddress.address, id: .id[-20:]}'
         ;;
     
     drafts)
         # List draft emails
-        COUNT=${2:-10}
+        COUNT=$(validate_count "${2:-}" 10)
         curl -s "$API/mailFolders/drafts/messages?\$top=$COUNT&\$select=id,subject,toRecipients,createdDateTime" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, to: (.value.toRecipients[0].emailAddress.address // "no recipient"), date: .value.createdDateTime[0:16], id: .value.id[-20:]}'
         ;;
@@ -341,7 +356,7 @@ case "$1" in
         
         # Search in drafts folder
         FULL_ID=$(curl -s "$API/mailFolders/drafts/messages?\$top=50&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Draft not found"
@@ -354,7 +369,7 @@ case "$1" in
         
         HTTP_CODE=$(echo "$RESULT" | tail -1)
         if [ "$HTTP_CODE" = "202" ]; then
-            echo "{\"status\": \"draft sent\", \"id\": \"$MSG_ID\"}"
+            jq -n --arg id "$MSG_ID" '{status: "draft sent", id: $id}'
         else
             echo "$RESULT" | head -n -1 | jq '.error // .'
         fi
@@ -372,24 +387,24 @@ case "$1" in
         fi
         
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
             exit 1
         fi
         
+        JSON_PAYLOAD=$(jq -n --arg c "$COMMENT" --arg to "$TO" \
+            '{comment: $c, toRecipients: [{emailAddress: {address: $to}}]}')
+
         RESULT=$(curl -s -w "\n%{http_code}" -X POST "$API/messages/$FULL_ID/forward" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{
-                \"comment\": \"$COMMENT\",
-                \"toRecipients\": [{\"emailAddress\": {\"address\": \"$TO\"}}]
-            }")
+            -d "$JSON_PAYLOAD")
         
         HTTP_CODE=$(echo "$RESULT" | tail -1)
         if [ "$HTTP_CODE" = "202" ]; then
-            echo "{\"status\": \"forwarded\", \"to\": \"$TO\", \"id\": \"$MSG_ID\"}"
+            jq -n --arg to "$TO" --arg id "$MSG_ID" '{status: "forwarded", to: $to, id: $id}'
         else
             echo "$RESULT" | head -n -1 | jq '.error // .'
         fi
@@ -400,7 +415,14 @@ case "$1" in
         MSG_ID="$2"
         ATT_NAME="$3"
         OUTPUT="${4:-.}"
-        
+
+        # Validate output path is an existing directory
+        if [ ! -d "$OUTPUT" ]; then
+            echo "{\"error\": \"Output path is not an existing directory: $OUTPUT\"}"
+            exit 1
+        fi
+        OUTPUT=$(cd "$OUTPUT" && pwd)
+
         if [ -z "$ATT_NAME" ]; then
             echo "Usage: outlook-mail.sh download <msg-id> <attachment-name> [output-path]"
             echo "Use 'attachments <id>' to see available attachments"
@@ -408,7 +430,7 @@ case "$1" in
         fi
         
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -417,7 +439,7 @@ case "$1" in
         
         # Get attachment by name
         ATT_DATA=$(curl -s "$API/messages/$FULL_ID/attachments" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.name == \"$ATT_NAME\")")
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg aname "$ATT_NAME" '.value[] | select(.name == $aname)')
         
         if [ -z "$ATT_DATA" ]; then
             echo "Attachment not found: $ATT_NAME"
@@ -464,7 +486,7 @@ case "$1" in
             # Get parent folder ID
             PARENT_LOWER=$(echo "$PARENT" | tr '[:upper:]' '[:lower:]')
             PARENT_ID=$(curl -s "$API/mailFolders" \
-                -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select((.displayName | ascii_downcase) == \"$PARENT_LOWER\") | .id" | head -1)
+                -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg fn "$PARENT_LOWER" '.value[] | select((.displayName | ascii_downcase) == $fn) | .id' | head -1)
             
             if [ -z "$PARENT_ID" ]; then
                 echo "Parent folder not found: $PARENT"
@@ -474,12 +496,12 @@ case "$1" in
             curl -s -X POST "$API/mailFolders/$PARENT_ID/childFolders" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
-                -d "{\"displayName\": \"$FOLDER_NAME\"}" | jq '{status: "folder created", name: .displayName, parent: "'"$PARENT"'", id: .id[-20:]}'
+                -d "$(jq -n --arg n "$FOLDER_NAME" '{displayName: $n}')" | jq --arg p "$PARENT" '{status: "folder created", name: .displayName, parent: $p, id: .id[-20:]}'
         else
             curl -s -X POST "$API/mailFolders" \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
-                -d "{\"displayName\": \"$FOLDER_NAME\"}" | jq '{status: "folder created", name: .displayName, id: .id[-20:]}'
+                -d "$(jq -n --arg n "$FOLDER_NAME" '{displayName: $n}')" | jq '{status: "folder created", name: .displayName, id: .id[-20:]}'
         fi
         ;;
     
@@ -494,7 +516,7 @@ case "$1" in
         
         FOLDER_LOWER=$(echo "$FOLDER_NAME" | tr '[:upper:]' '[:lower:]')
         FOLDER_ID=$(curl -s "$API/mailFolders" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select((.displayName | ascii_downcase) == \"$FOLDER_LOWER\") | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg fn "$FOLDER_LOWER" '.value[] | select((.displayName | ascii_downcase) == $fn) | .id' | head -1)
         
         if [ -z "$FOLDER_ID" ]; then
             echo "Folder not found: $FOLDER_NAME"
@@ -506,7 +528,7 @@ case "$1" in
         
         HTTP_CODE=$(echo "$RESULT" | tail -1)
         if [ "$HTTP_CODE" = "204" ]; then
-            echo "{\"status\": \"folder deleted\", \"name\": \"$FOLDER_NAME\"}"
+            jq -n --arg n "$FOLDER_NAME" '{status: "folder deleted", name: $n}'
         else
             echo "$RESULT" | head -n -1 | jq '.error // .'
         fi
@@ -525,7 +547,7 @@ case "$1" in
         
         for MSG_ID in "$@"; do
             FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-                -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+                -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
             
             if [ -n "$FULL_ID" ]; then
                 curl -s -X PATCH "$API/messages/$FULL_ID" \
@@ -554,7 +576,7 @@ case "$1" in
         
         for MSG_ID in "$@"; do
             FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-                -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+                -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
             
             if [ -n "$FULL_ID" ]; then
                 curl -s -X POST "$API/messages/$FULL_ID/move" \
@@ -588,7 +610,7 @@ case "$1" in
         fi
         
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id,categories" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -596,19 +618,15 @@ case "$1" in
         fi
         
         # Get current categories and add new one
-        CURRENT=$(curl -s "$API/messages/$FULL_ID?\$select=categories" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r '.categories | join(",")')
-        
-        if [ -n "$CURRENT" ]; then
-            NEW_CATS="[\"$CURRENT\",\"$CATEGORY\"]"
-        else
-            NEW_CATS="[\"$CATEGORY\"]"
-        fi
-        
+        CURRENT_CATS=$(curl -s "$API/messages/$FULL_ID?\$select=categories" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.categories')
+
+        NEW_CATS=$(echo "$CURRENT_CATS" | jq --arg cat "$CATEGORY" '. + [$cat]')
+
         curl -s -X PATCH "$API/messages/$FULL_ID" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"categories\": $NEW_CATS}" | jq '{status: "categorized", subject: .subject, categories: .categories, id: .id[-20:]}'
+            -d "$(jq -n --argjson cats "$NEW_CATS" '{categories: $cats}')" | jq '{status: "categorized", subject: .subject, categories: .categories, id: .id[-20:]}'
         ;;
     
     uncategorize)
@@ -616,7 +634,7 @@ case "$1" in
         MSG_ID="$2"
         
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -631,14 +649,14 @@ case "$1" in
     
     focused)
         # List focused inbox (important emails)
-        COUNT=${2:-10}
+        COUNT=$(validate_count "${2:-}" 10)
         curl -s "$API/messages?\$filter=inferenceClassification%20eq%20'focused'&\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,receivedDateTime" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}) else {info: "Focused inbox not available or empty"} end'
         ;;
     
     other)
         # List "other" inbox (non-focused emails)
-        COUNT=${2:-10}
+        COUNT=$(validate_count "${2:-}" 10)
         curl -s "$API/messages?\$filter=inferenceClassification%20eq%20'other'&\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,receivedDateTime" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}) else {info: "Other inbox not available or empty"} end'
         ;;
@@ -648,7 +666,7 @@ case "$1" in
         MSG_ID="$2"
         
         FULL_ID=$(curl -s "$API/messages?\$top=100&\$select=id" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r ".value[] | select(.id | endswith(\"$MSG_ID\")) | .id" | head -1)
+            -H "Authorization: Bearer $ACCESS_TOKEN" | jq -r --arg mid "$MSG_ID" '.value[] | select(.id | endswith($mid)) | .id' | head -1)
         
         if [ -z "$FULL_ID" ]; then
             echo "Message not found"
@@ -667,9 +685,10 @@ case "$1" in
         fi
         
         echo "Searching thread by keyword: $KEYWORD"
-        
+
         # Search by single keyword
-        curl -s "$API/messages?\$search=\"$KEYWORD\"&\$top=20&\$select=id,subject,from,receivedDateTime" \
+        KEYWORD_ENC=$(jq -rn --arg k "$KEYWORD" '$k | @uri')
+        curl -s "$API/messages?\$search=\"$KEYWORD_ENC\"&\$top=20&\$select=id,subject,from,receivedDateTime" \
             -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}'
         ;;
     

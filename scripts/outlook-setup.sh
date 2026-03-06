@@ -13,6 +13,12 @@ if [ "$1" = "--account" ] || [ "$1" = "-a" ]; then
     shift 2
 fi
 
+# Validate account name to prevent directory traversal
+if [[ ! "$ACCOUNT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: Invalid account name '$ACCOUNT'. Use only letters, numbers, hyphens, and underscores."
+    exit 1
+fi
+
 CONFIG_DIR="$BASE_DIR/$ACCOUNT"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 CREDS_FILE="$CONFIG_DIR/credentials.json"

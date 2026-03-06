@@ -31,6 +31,12 @@ if [ -f "$BASE_DIR/credentials.json" ] && [ ! -d "$BASE_DIR/default" ]; then
     echo "Migrated existing config to 'default' account"
 fi
 
+# Validate account name to prevent directory traversal
+if [[ ! "$ACCOUNT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    echo "Error: Invalid account name '$ACCOUNT'. Use only letters, numbers, hyphens, and underscores."
+    exit 1
+fi
+
 CONFIG_DIR="$BASE_DIR/$ACCOUNT"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 CREDS_FILE="$CONFIG_DIR/credentials.json"
@@ -62,6 +68,7 @@ case "$1" in
         
         if echo "$RESPONSE" | jq -e '.access_token' > /dev/null 2>&1; then
             echo "$RESPONSE" > "$CREDS_FILE"
+            chmod 600 "$CREDS_FILE"
             echo "Token refreshed successfully"
         else
             echo "Error refreshing token:"
