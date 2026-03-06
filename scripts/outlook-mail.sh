@@ -647,6 +647,165 @@ case "$1" in
             -d '{"categories": []}' | jq '{status: "categories removed", subject: .subject, id: .id[-20:]}'
         ;;
     
+    rules)
+        # Show current auto-categorize rules
+        RULES_FILE="$CONFIG_DIR/rules.json"
+        if [ ! -f "$RULES_FILE" ]; then
+            echo "{\"info\": \"No rules configured. Use add-rule to create rules.\"}"
+            exit 0
+        fi
+        jq '.' "$RULES_FILE"
+        ;;
+
+    add-rule)
+        # Add an auto-categorize rule: outlook-mail.sh add-rule <field> <pattern> <category>
+        MATCH_FIELD="$2"
+        PATTERN="$3"
+        CATEGORY="$4"
+
+        if [ -z "$MATCH_FIELD" ] || [ -z "$PATTERN" ] || [ -z "$CATEGORY" ]; then
+            echo "Usage: outlook-mail.sh add-rule <field> <pattern> <category>"
+            echo "Fields: from, subject"
+            echo "Example: outlook-mail.sh add-rule from @github.com Dev"
+            echo "Example: outlook-mail.sh add-rule subject invoice Finance"
+            exit 1
+        fi
+
+        case "$MATCH_FIELD" in
+            from|subject) ;;
+            *)
+                echo "Error: field must be 'from' or 'subject'"
+                exit 1
+                ;;
+        esac
+
+        RULES_FILE="$CONFIG_DIR/rules.json"
+        if [ ! -f "$RULES_FILE" ]; then
+            echo '{"rules":[]}' > "$RULES_FILE"
+            chmod 600 "$RULES_FILE"
+        fi
+
+        jq --arg f "$MATCH_FIELD" --arg p "$PATTERN" --arg c "$CATEGORY" \
+            '.rules += [{match: $f, pattern: $p, category: $c}]' "$RULES_FILE" > "$RULES_FILE.tmp" \
+            && mv "$RULES_FILE.tmp" "$RULES_FILE"
+        jq -n --arg f "$MATCH_FIELD" --arg p "$PATTERN" --arg c "$CATEGORY" \
+            '{status: "rule added", match: $f, pattern: $p, category: $c}'
+        ;;
+
+    remove-rule)
+        # Remove a rule by index (0-based): outlook-mail.sh remove-rule <index>
+        RULE_INDEX="$2"
+
+        if [ -z "$RULE_INDEX" ]; then
+            echo "Usage: outlook-mail.sh remove-rule <index>"
+            echo "Use 'rules' to see current rules with their indices"
+            exit 1
+        fi
+
+        RULES_FILE="$CONFIG_DIR/rules.json"
+        if [ ! -f "$RULES_FILE" ]; then
+            echo "{\"error\": \"No rules file found\"}"
+            exit 1
+        fi
+
+        RULE_COUNT=$(jq '.rules | length' "$RULES_FILE")
+        if [ "$RULE_INDEX" -ge "$RULE_COUNT" ] 2>/dev/null; then
+            echo "{\"error\": \"Rule index out of range. Max index: $((RULE_COUNT - 1))\"}"
+            exit 1
+        fi
+
+        REMOVED=$(jq --argjson i "$RULE_INDEX" '.rules[$i]' "$RULES_FILE")
+        jq --argjson i "$RULE_INDEX" 'del(.rules[$i])' "$RULES_FILE" > "$RULES_FILE.tmp" \
+            && mv "$RULES_FILE.tmp" "$RULES_FILE"
+        echo "$REMOVED" | jq '{status: "rule removed"} + .'
+        ;;
+
+    auto-categorize)
+        # Apply rules to recent uncategorized emails: outlook-mail.sh auto-categorize [count]
+        COUNT=$(validate_count "${2:-}" 50)
+        RULES_FILE="$CONFIG_DIR/rules.json"
+
+        if [ ! -f "$RULES_FILE" ]; then
+            echo "{\"error\": \"No rules configured. Use add-rule to create rules.\"}"
+            exit 1
+        fi
+
+        RULE_COUNT=$(jq '.rules | length' "$RULES_FILE")
+        if [ "$RULE_COUNT" -eq 0 ]; then
+            echo "{\"error\": \"No rules defined. Use add-rule to create rules.\"}"
+            exit 1
+        fi
+
+        # Fetch recent emails with their current categories
+        MESSAGES=$(curl -s "$API/messages?\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,categories" \
+            -H "Authorization: Bearer $ACCESS_TOKEN")
+
+        MSG_COUNT=$(echo "$MESSAGES" | jq '.value | length')
+        CATEGORIZED=0
+        SKIPPED=0
+        ALREADY=0
+
+        for i in $(seq 0 $((MSG_COUNT - 1))); do
+            MSG=$(echo "$MESSAGES" | jq --argjson i "$i" '.value[$i]')
+            MSG_ID=$(echo "$MSG" | jq -r '.id')
+            MSG_SUBJECT=$(echo "$MSG" | jq -r '.subject // ""' | tr '[:upper:]' '[:lower:]')
+            MSG_FROM=$(echo "$MSG" | jq -r '.from.emailAddress.address // ""' | tr '[:upper:]' '[:lower:]')
+            EXISTING_CATS=$(echo "$MSG" | jq '.categories')
+
+            # Collect matching categories from all rules
+            NEW_CATS="$EXISTING_CATS"
+            MATCHED=false
+
+            for r in $(seq 0 $((RULE_COUNT - 1))); do
+                RULE=$(jq --argjson r "$r" '.rules[$r]' "$RULES_FILE")
+                MATCH_FIELD=$(echo "$RULE" | jq -r '.match')
+                PATTERN=$(echo "$RULE" | jq -r '.pattern' | tr '[:upper:]' '[:lower:]')
+                CATEGORY=$(echo "$RULE" | jq -r '.category')
+
+                # Check if category already applied
+                HAS_CAT=$(echo "$NEW_CATS" | jq --arg c "$CATEGORY" 'map(select(. == $c)) | length')
+                if [ "$HAS_CAT" -gt 0 ]; then
+                    continue
+                fi
+
+                # Match against the appropriate field
+                MATCH_VALUE=""
+                case "$MATCH_FIELD" in
+                    from) MATCH_VALUE="$MSG_FROM" ;;
+                    subject) MATCH_VALUE="$MSG_SUBJECT" ;;
+                esac
+
+                if echo "$MATCH_VALUE" | grep -qi "$PATTERN" 2>/dev/null; then
+                    NEW_CATS=$(echo "$NEW_CATS" | jq --arg c "$CATEGORY" '. + [$c]')
+                    MATCHED=true
+                fi
+            done
+
+            if [ "$MATCHED" = true ]; then
+                # Apply the updated categories
+                curl -s -X PATCH "$API/messages/$MSG_ID" \
+                    -H "Authorization: Bearer $ACCESS_TOKEN" \
+                    -H "Content-Type: application/json" \
+                    -d "$(jq -n --argjson cats "$NEW_CATS" '{categories: $cats}')" > /dev/null
+                CATEGORIZED=$((CATEGORIZED + 1))
+                MSG_SUBJ_DISPLAY=$(echo "$MSG" | jq -r '.subject // "(no subject)"')
+                APPLIED_CATS=$(echo "$NEW_CATS" | jq -c '.')
+                jq -n --arg s "$MSG_SUBJ_DISPLAY" --argjson c "$NEW_CATS" '{applied: $s, categories: $c}'
+            else
+                # Check if it already had categories
+                EXISTING_LEN=$(echo "$EXISTING_CATS" | jq 'length')
+                if [ "$EXISTING_LEN" -gt 0 ]; then
+                    ALREADY=$((ALREADY + 1))
+                else
+                    SKIPPED=$((SKIPPED + 1))
+                fi
+            fi
+        done
+
+        jq -n --argjson c "$CATEGORIZED" --argjson s "$SKIPPED" --argjson a "$ALREADY" --argjson t "$MSG_COUNT" \
+            '{status: "auto-categorize complete", scanned: $t, categorized: $c, no_match: $s, already_categorized: $a}'
+        ;;
+
     focused)
         # List focused inbox (important emails)
         COUNT=$(validate_count "${2:-}" 10)
@@ -719,6 +878,13 @@ case "$1" in
         echo "  categories                - List available categories"
         echo "  categorize <id> <name>    - Add category to email"
         echo "  uncategorize <id>         - Remove categories"
+        echo ""
+        echo "AUTO-CATEGORIZE:"
+        echo "  rules                     - Show current rules"
+        echo "  add-rule <field> <pattern> <category>"
+        echo "                            - Add rule (field: from, subject)"
+        echo "  remove-rule <index>       - Remove rule by index"
+        echo "  auto-categorize [count]   - Apply rules to recent emails"
         echo ""
         echo "SENDING:"
         echo "  send <to> <subj> <body>   - Send new email"

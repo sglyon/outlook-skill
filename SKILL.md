@@ -110,6 +110,14 @@ Existing single-account setups are auto-migrated to `default`.
 ./scripts/outlook-mail.sh stats                   # Inbox statistics
 ```
 
+### Auto-Categorize
+```bash
+./scripts/outlook-mail.sh rules                              # Show rules
+./scripts/outlook-mail.sh add-rule <field> <pattern> <cat>   # Add rule
+./scripts/outlook-mail.sh remove-rule <index>                # Remove rule
+./scripts/outlook-mail.sh auto-categorize [count]            # Apply rules
+```
+
 ## Calendar
 
 ### Viewing Events
@@ -218,6 +226,44 @@ Access tokens expire after ~1 hour. Refresh with:
 - `Calendars.ReadWrite` - Read and modify calendar events
 - `offline_access` - Refresh tokens (stay logged in)
 - `User.Read` - Basic profile info
+
+## Auto-Categorization
+
+### Rule-Based (Automated)
+
+Define rules to automatically categorize emails by sender or subject pattern:
+
+```bash
+# Add rules
+./scripts/outlook-mail.sh add-rule from @github.com Dev
+./scripts/outlook-mail.sh add-rule from @linkedin.com Social
+./scripts/outlook-mail.sh add-rule subject invoice Finance
+./scripts/outlook-mail.sh subject receipt Finance
+
+# View current rules
+./scripts/outlook-mail.sh rules
+
+# Remove a rule by index
+./scripts/outlook-mail.sh remove-rule 0
+
+# Apply rules to recent emails (default: 50)
+./scripts/outlook-mail.sh auto-categorize
+./scripts/outlook-mail.sh auto-categorize 100
+```
+
+Rules are stored per-account in `~/.outlook-mcp/<account>/rules.json`. Multiple rules can match the same email, giving it multiple categories. Rules match case-insensitively and check if the pattern appears anywhere in the field.
+
+### AI-Assisted Categorization
+
+When the user asks to categorize emails and no rule covers the case, the agent should:
+
+1. First run `categories` to see available Outlook categories.
+2. Read the uncategorized emails (use `inbox` or `unread`).
+3. Based on the email subject, sender, and content, suggest appropriate categories.
+4. **Ask the user to confirm** the proposed categorization before applying.
+5. Apply using `categorize <id> <category-name>`.
+
+If the user wants to make the categorization permanent, suggest adding a rule with `add-rule` so future emails from the same sender or with similar subjects are handled automatically.
 
 ## Agent Safety Rules
 
