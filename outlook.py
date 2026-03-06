@@ -270,12 +270,13 @@ class MsalTokenCredential(TokenCredential):
         claims: str | None = None,
         tenant_id: str | None = None,
         enable_cae: bool = False,
+        force_refresh: bool = False,
         **kwargs: Any,
     ) -> AccessToken:
         accounts = self._app.get_accounts()
         if not accounts:
             raise AuthError("No cached account. Run: uv run outlook.py setup")
-        result = self._app.acquire_token_silent(list(scopes), account=accounts[0])
+        result = self._app.acquire_token_silent(list(scopes), account=accounts[0], force_refresh=force_refresh)
         if not result or "access_token" not in result:
             raise AuthError("Token refresh failed. Run: uv run outlook.py setup")
         self._save_cache()
@@ -1891,8 +1892,8 @@ def today() -> None:
     from datetime import datetime as _dt
 
     now = _dt.now()
-    start_iso = now.strftime("%Y-%m-%dT00:00:00Z")
-    end_iso = now.strftime("%Y-%m-%dT23:59:59Z")
+    start_iso = now.strftime("%Y-%m-%dT00:00:00")
+    end_iso = now.strftime("%Y-%m-%dT23:59:59")
 
     async def _run():
         from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import CalendarViewRequestBuilder
@@ -1928,9 +1929,9 @@ def week() -> None:
     from datetime import datetime as _dt, timedelta
 
     now = _dt.now()
-    start_iso = now.strftime("%Y-%m-%dT00:00:00Z")
+    start_iso = now.strftime("%Y-%m-%dT00:00:00")
     end_dt = now + timedelta(days=7)
-    end_iso = end_dt.strftime("%Y-%m-%dT23:59:59Z")
+    end_iso = end_dt.strftime("%Y-%m-%dT23:59:59")
 
     async def _run():
         from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import CalendarViewRequestBuilder
@@ -2040,6 +2041,15 @@ def free(
     end: str = typer.Argument(..., help="End datetime (ISO format)"),
 ) -> None:
     """Check free/busy status for a time range."""
+    from datetime import datetime as _dt
+    try:
+        _dt.fromisoformat(start)
+    except ValueError:
+        _error_exit(f"Invalid datetime format: {start}. Use YYYY-MM-DDTHH:MM")
+    try:
+        _dt.fromisoformat(end)
+    except ValueError:
+        _error_exit(f"Invalid datetime format: {end}. Use YYYY-MM-DDTHH:MM")
     client = get_graph_client()
     tz = detect_timezone()
 
@@ -2081,6 +2091,15 @@ def create(
     location: str = typer.Option(None, "--location", "-l", help="Event location"),
 ) -> None:
     """Create a new calendar event."""
+    from datetime import datetime as _dt
+    try:
+        _dt.fromisoformat(start)
+    except ValueError:
+        _error_exit(f"Invalid datetime format: {start}. Use YYYY-MM-DDTHH:MM")
+    try:
+        _dt.fromisoformat(end)
+    except ValueError:
+        _error_exit(f"Invalid datetime format: {end}. Use YYYY-MM-DDTHH:MM")
     client = get_graph_client()
     tz = detect_timezone()
 
@@ -2173,6 +2192,12 @@ def update(
     valid_fields = {"subject", "location", "start", "end"}
     if field not in valid_fields:
         _error_exit(f"Invalid field '{field}'. Valid fields: {', '.join(sorted(valid_fields))}")
+    if field in ("start", "end"):
+        from datetime import datetime as _dt
+        try:
+            _dt.fromisoformat(value)
+        except ValueError:
+            _error_exit(f"Invalid datetime format: {value}. Use YYYY-MM-DDTHH:MM")
 
     async def _run():
         from msgraph.generated.models.event import Event
@@ -2248,7 +2273,7 @@ def refresh() -> None:
             _error_exit(f"No client_id in config for account '{acct}'.")
         cache_path = _account_dir(acct) / "token_cache.json"
         credential = MsalTokenCredential(client_id, cache_path)
-        credential.get_token("https://graph.microsoft.com/.default")
+        credential.get_token("https://graph.microsoft.com/.default", force_refresh=True)
         output_status({"status": "ok", "message": "Token refreshed successfully"})
     except AuthError as exc:
         _error_exit(str(exc))
