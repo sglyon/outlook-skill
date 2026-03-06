@@ -156,6 +156,31 @@ def output_status(data: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shared message list helpers
+# ---------------------------------------------------------------------------
+
+MSG_COLUMNS = [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")]
+MSG_COLUMNS_WITH_READ = [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("read", "Read"), ("id", "ID")]
+
+
+def _format_message_rows(messages, include_read: bool = False) -> list[dict]:
+    """Format Graph SDK message objects into output rows."""
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        row = {
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "id": (msg.id or "")[-20:],
+        }
+        if include_read:
+            row["read"] = msg.is_read
+        rows.append(row)
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # HTML stripping
 # ---------------------------------------------------------------------------
 
@@ -550,23 +575,12 @@ def inbox(
     except Exception as exc:
         _error_exit(f"Failed to fetch inbox: {exc}")
 
-    rows = []
-    for i, msg in enumerate(messages, 1):
-        rows.append({
-            "n": i,
-            "subject": msg.subject or "(no subject)",
-            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
-            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
-            "read": msg.is_read,
-            "id": (msg.id or "")[-20:],
-        })
-
-    output_table("Inbox", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("read", "Read"), ("id", "ID")], rows)
+    output_table("Inbox", MSG_COLUMNS_WITH_READ, _format_message_rows(messages, include_read=True))
 
 
 @mail_app.command()
 def unread(
-    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+    count: int = typer.Option(20, "--count", "-n", help="Number of messages"),
 ) -> None:
     """List unread messages."""
     client = get_graph_client()
@@ -592,23 +606,13 @@ def unread(
     except Exception as exc:
         _error_exit(f"Failed to fetch unread messages: {exc}")
 
-    rows = []
-    for i, msg in enumerate(messages, 1):
-        rows.append({
-            "n": i,
-            "subject": msg.subject or "(no subject)",
-            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
-            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
-            "id": (msg.id or "")[-20:],
-        })
-
-    output_table("Unread", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+    output_table("Unread", MSG_COLUMNS, _format_message_rows(messages))
 
 
 @mail_app.command()
 def search(
     query: str = typer.Argument(..., help="Search query"),
-    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+    count: int = typer.Option(20, "--count", "-n", help="Number of messages"),
 ) -> None:
     """Search messages."""
     client = get_graph_client()
@@ -633,23 +637,13 @@ def search(
     except Exception as exc:
         _error_exit(f"Failed to search messages: {exc}")
 
-    rows = []
-    for i, msg in enumerate(messages, 1):
-        rows.append({
-            "n": i,
-            "subject": msg.subject or "(no subject)",
-            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
-            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
-            "id": (msg.id or "")[-20:],
-        })
-
-    output_table("Search Results", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+    output_table("Search Results", MSG_COLUMNS, _format_message_rows(messages))
 
 
 @mail_app.command("from")
 def from_(
     email: str = typer.Argument(..., help="Email address to search"),
-    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+    count: int = typer.Option(20, "--count", "-n", help="Number of messages"),
 ) -> None:
     """List messages from a specific sender."""
     client = get_graph_client()
@@ -674,18 +668,7 @@ def from_(
     except Exception as exc:
         _error_exit(f"Failed to fetch messages from {email}: {exc}")
 
-    rows = []
-    for i, msg in enumerate(messages, 1):
-        rows.append({
-            "n": i,
-            "subject": msg.subject or "(no subject)",
-            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
-            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
-            "read": msg.is_read,
-            "id": (msg.id or "")[-20:],
-        })
-
-    output_table(f"From {email}", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("read", "Read"), ("id", "ID")], rows)
+    output_table(f"From {email}", MSG_COLUMNS_WITH_READ, _format_message_rows(messages, include_read=True))
 
 
 @mail_app.command("read")
@@ -695,14 +678,8 @@ def read_msg(
     """Read a specific message."""
     client = get_graph_client()
 
-    try:
-        full_id = resolve_message_id(client, id)
-    except AuthError as exc:
-        _error_exit(str(exc))
-    except Exception as exc:
-        _error_exit(f"Failed to resolve message ID: {exc}")
-
     async def _run():
+        full_id = await _resolve_message_id(client, id)
         from msgraph.generated.users.item.messages.item.message_item_request_builder import MessageItemRequestBuilder
         params = MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters(
             select=["id", "subject", "from", "receivedDateTime", "body", "toRecipients"],
@@ -765,14 +742,8 @@ def attachments(
     """List attachments for a message."""
     client = get_graph_client()
 
-    try:
-        full_id = resolve_message_id(client, id)
-    except AuthError as exc:
-        _error_exit(str(exc))
-    except Exception as exc:
-        _error_exit(f"Failed to resolve message ID: {exc}")
-
     async def _run():
+        full_id = await _resolve_message_id(client, id)
         result = await client.me.messages.by_message_id(full_id).attachments.get()
         return result.value or []
 
@@ -823,17 +794,7 @@ def focused(
     except Exception as exc:
         _error_exit(f"Failed to fetch focused messages: {exc}")
 
-    rows = []
-    for i, msg in enumerate(messages, 1):
-        rows.append({
-            "n": i,
-            "subject": msg.subject or "(no subject)",
-            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
-            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
-            "id": (msg.id or "")[-20:],
-        })
-
-    output_table("Focused", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+    output_table("Focused", MSG_COLUMNS, _format_message_rows(messages))
 
 
 @mail_app.command()
@@ -864,17 +825,7 @@ def other(
     except Exception as exc:
         _error_exit(f"Failed to fetch other messages: {exc}")
 
-    rows = []
-    for i, msg in enumerate(messages, 1):
-        rows.append({
-            "n": i,
-            "subject": msg.subject or "(no subject)",
-            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
-            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
-            "id": (msg.id or "")[-20:],
-        })
-
-    output_table("Other", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+    output_table("Other", MSG_COLUMNS, _format_message_rows(messages))
 
 
 @mail_app.command()
@@ -884,14 +835,8 @@ def thread(
     """List all messages in the same conversation thread."""
     client = get_graph_client()
 
-    try:
-        full_id = resolve_message_id(client, id)
-    except AuthError as exc:
-        _error_exit(str(exc))
-    except Exception as exc:
-        _error_exit(f"Failed to resolve message ID: {exc}")
-
     async def _run():
+        full_id = await _resolve_message_id(client, id)
         from msgraph.generated.users.item.messages.item.message_item_request_builder import MessageItemRequestBuilder
         from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
 
@@ -926,17 +871,7 @@ def thread(
     except Exception as exc:
         _error_exit(f"Failed to fetch thread: {exc}")
 
-    rows = []
-    for i, msg in enumerate(messages, 1):
-        rows.append({
-            "n": i,
-            "subject": msg.subject or "(no subject)",
-            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
-            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
-            "id": (msg.id or "")[-20:],
-        })
-
-    output_table("Thread", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+    output_table("Thread", MSG_COLUMNS, _format_message_rows(messages))
 
 
 @mail_app.command()
