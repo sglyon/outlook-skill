@@ -519,6 +519,507 @@ def test() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mail commands
+# ---------------------------------------------------------------------------
+
+
+@mail_app.command()
+def inbox(
+    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+) -> None:
+    """List inbox messages."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
+        query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "from", "receivedDateTime", "isRead"],
+            orderby=["receivedDateTime desc"],
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+        )
+        result = await client.me.messages.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        messages = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch inbox: {exc}")
+
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        rows.append({
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "read": msg.is_read,
+            "id": (msg.id or "")[-20:],
+        })
+
+    output_table("Inbox", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("read", "Read"), ("id", "ID")], rows)
+
+
+@mail_app.command()
+def unread(
+    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+) -> None:
+    """List unread messages."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
+        query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "from", "receivedDateTime"],
+            orderby=["receivedDateTime desc"],
+            filter="isRead eq false",
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+        )
+        result = await client.me.messages.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        messages = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch unread messages: {exc}")
+
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        rows.append({
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "id": (msg.id or "")[-20:],
+        })
+
+    output_table("Unread", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+
+
+@mail_app.command()
+def search(
+    query: str = typer.Argument(..., help="Search query"),
+    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+) -> None:
+    """Search messages."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
+        params = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "from", "receivedDateTime"],
+            search=query,
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=params,
+        )
+        result = await client.me.messages.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        messages = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to search messages: {exc}")
+
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        rows.append({
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "id": (msg.id or "")[-20:],
+        })
+
+    output_table("Search Results", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+
+
+@mail_app.command("from")
+def from_(
+    email: str = typer.Argument(..., help="Email address to search"),
+    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+) -> None:
+    """List messages from a specific sender."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
+        params = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "from", "receivedDateTime", "isRead"],
+            search=f"from:{email}",
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=params,
+        )
+        result = await client.me.messages.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        messages = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch messages from {email}: {exc}")
+
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        rows.append({
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "read": msg.is_read,
+            "id": (msg.id or "")[-20:],
+        })
+
+    output_table(f"From {email}", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("read", "Read"), ("id", "ID")], rows)
+
+
+@mail_app.command("read")
+def read_msg(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """Read a specific message."""
+    client = get_graph_client()
+
+    try:
+        full_id = resolve_message_id(client, id)
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to resolve message ID: {exc}")
+
+    async def _run():
+        from msgraph.generated.users.item.messages.item.message_item_request_builder import MessageItemRequestBuilder
+        params = MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters(
+            select=["id", "subject", "from", "receivedDateTime", "body", "toRecipients"],
+        )
+        config = MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration(
+            query_parameters=params,
+        )
+        return await client.me.messages.by_message_id(full_id).get(request_configuration=config)
+
+    try:
+        msg = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to read message: {exc}")
+
+    if not msg:
+        _error_exit("Message not found.")
+
+    from_name = ""
+    from_addr = ""
+    if msg.from_ and msg.from_.email_address:
+        from_name = msg.from_.email_address.name or ""
+        from_addr = msg.from_.email_address.address or ""
+
+    to_list = []
+    if msg.to_recipients:
+        for r in msg.to_recipients:
+            if r.email_address and r.email_address.address:
+                to_list.append(r.email_address.address)
+
+    body_text = ""
+    if msg.body and msg.body.content:
+        body_text = strip_html(msg.body.content)[:2000]
+
+    if state.json_mode:
+        data = {
+            "subject": msg.subject or "(no subject)",
+            "from": {"name": from_name, "address": from_addr},
+            "to": to_list,
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "body": body_text,
+        }
+        print(json.dumps(data, indent=2, default=str))
+    else:
+        data = {
+            "subject": msg.subject or "(no subject)",
+            "from": f"{from_name} <{from_addr}>" if from_name else from_addr,
+            "to": ", ".join(to_list),
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "body": body_text,
+        }
+        output_detail(data)
+
+
+@mail_app.command()
+def attachments(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """List attachments for a message."""
+    client = get_graph_client()
+
+    try:
+        full_id = resolve_message_id(client, id)
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to resolve message ID: {exc}")
+
+    async def _run():
+        result = await client.me.messages.by_message_id(full_id).attachments.get()
+        return result.value or []
+
+    try:
+        atts = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch attachments: {exc}")
+
+    rows = []
+    for att in atts:
+        rows.append({
+            "name": att.name or "",
+            "size": att.size or 0,
+            "contentType": att.content_type or "",
+            "id": att.id or "",
+        })
+
+    output_table("Attachments", [("name", "Name"), ("size", "Size"), ("contentType", "Content Type"), ("id", "ID")], rows)
+
+
+@mail_app.command()
+def focused(
+    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+) -> None:
+    """List focused inbox messages."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
+        query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "from", "receivedDateTime"],
+            orderby=["receivedDateTime desc"],
+            filter="inferenceClassification eq 'focused'",
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+        )
+        result = await client.me.messages.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        messages = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch focused messages: {exc}")
+
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        rows.append({
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "id": (msg.id or "")[-20:],
+        })
+
+    output_table("Focused", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+
+
+@mail_app.command()
+def other(
+    count: int = typer.Option(10, "--count", "-n", help="Number of messages"),
+) -> None:
+    """List 'other' inbox messages."""
+    client = get_graph_client()
+
+    async def _run():
+        from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
+        query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=count,
+            select=["id", "subject", "from", "receivedDateTime"],
+            orderby=["receivedDateTime desc"],
+            filter="inferenceClassification eq 'other'",
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+        )
+        result = await client.me.messages.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        messages = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch other messages: {exc}")
+
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        rows.append({
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "id": (msg.id or "")[-20:],
+        })
+
+    output_table("Other", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+
+
+@mail_app.command()
+def thread(
+    id: str = typer.Argument(..., help="Message ID (or partial ID suffix)"),
+) -> None:
+    """List all messages in the same conversation thread."""
+    client = get_graph_client()
+
+    try:
+        full_id = resolve_message_id(client, id)
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to resolve message ID: {exc}")
+
+    async def _run():
+        from msgraph.generated.users.item.messages.item.message_item_request_builder import MessageItemRequestBuilder
+        from msgraph.generated.users.item.messages.messages_request_builder import MessagesRequestBuilder
+
+        # First get the message to find its conversationId
+        params = MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters(
+            select=["id", "conversationId"],
+        )
+        msg_config = MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration(
+            query_parameters=params,
+        )
+        msg = await client.me.messages.by_message_id(full_id).get(request_configuration=msg_config)
+        if not msg or not msg.conversation_id:
+            raise ValueError("Could not retrieve conversation ID for message.")
+
+        # Now fetch all messages with same conversationId
+        query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+            top=50,
+            select=["id", "subject", "from", "receivedDateTime"],
+            orderby=["receivedDateTime asc"],
+            filter=f"conversationId eq '{msg.conversation_id}'",
+        )
+        config = MessagesRequestBuilder.MessagesRequestBuilderGetRequestConfiguration(
+            query_parameters=query,
+        )
+        result = await client.me.messages.get(request_configuration=config)
+        return result.value or []
+
+    try:
+        messages = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch thread: {exc}")
+
+    rows = []
+    for i, msg in enumerate(messages, 1):
+        rows.append({
+            "n": i,
+            "subject": msg.subject or "(no subject)",
+            "from": msg.from_.email_address.address if msg.from_ and msg.from_.email_address else "",
+            "date": str(msg.received_date_time)[:16] if msg.received_date_time else "",
+            "id": (msg.id or "")[-20:],
+        })
+
+    output_table("Thread", [("n", "#"), ("subject", "Subject"), ("from", "From"), ("date", "Date"), ("id", "ID")], rows)
+
+
+@mail_app.command()
+def folders() -> None:
+    """List mail folders."""
+    client = get_graph_client()
+
+    async def _run():
+        result = await client.me.mail_folders.get()
+        return result.value or []
+
+    try:
+        folder_list = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch mail folders: {exc}")
+
+    rows = []
+    for f in folder_list:
+        rows.append({
+            "name": f.display_name or "",
+            "total": f.total_item_count or 0,
+            "unread": f.unread_item_count or 0,
+        })
+
+    output_table("Mail Folders", [("name", "Name"), ("total", "Total"), ("unread", "Unread")], rows)
+
+
+@mail_app.command()
+def stats() -> None:
+    """Show inbox statistics."""
+    client = get_graph_client()
+
+    async def _run():
+        return await client.me.mail_folders.by_mail_folder_id("inbox").get()
+
+    try:
+        folder = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch inbox stats: {exc}")
+
+    if not folder:
+        _error_exit("Could not retrieve inbox folder.")
+
+    data = {
+        "folder": folder.display_name or "Inbox",
+        "total": folder.total_item_count or 0,
+        "unread": folder.unread_item_count or 0,
+    }
+    output_detail(data)
+
+
+@mail_app.command()
+def categories() -> None:
+    """List master categories."""
+    client = get_graph_client()
+
+    async def _run():
+        result = await client.me.outlook.master_categories.get()
+        return result.value or []
+
+    try:
+        cats = asyncio.run(_run())
+    except AuthError as exc:
+        _error_exit(str(exc))
+    except Exception as exc:
+        _error_exit(f"Failed to fetch categories: {exc}")
+
+    rows = []
+    for cat in cats:
+        rows.append({
+            "name": cat.display_name or "",
+            "color": cat.color or "",
+            "id": (cat.id or "")[:8],
+        })
+
+    output_table("Categories", [("name", "Name"), ("color", "Color"), ("id", "ID")], rows)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
