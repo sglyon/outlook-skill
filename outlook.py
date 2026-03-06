@@ -6,6 +6,7 @@
 #     "msgraph-sdk>=1.50",
 #     "msal>=1.28",
 #     "rich>=13.0",
+#     "azure-core>=1.30",
 # ]
 # ///
 """Outlook CLI — Python rewrite of the Outlook shell scripts.
@@ -24,7 +25,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NoReturn
 
 import msal
 import typer
@@ -49,6 +50,7 @@ SCOPES = [
     "offline_access",
 ]
 
+# Rich output on stderr so --json on stdout stays clean
 console = Console(stderr=True)
 
 # ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ def validate_account(name: str) -> str:
 
 
 def _account_dir(account: str) -> Path:
+    validate_account(account)
     return BASE_DIR / account
 
 
@@ -110,7 +113,7 @@ def load_config(account: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _error_exit(msg: str, code: int = 1) -> None:
+def _error_exit(msg: str, code: int = 1) -> NoReturn:
     """Print an error and exit."""
     if state.json_mode:
         console.print_json(json.dumps({"error": msg}))
@@ -219,7 +222,7 @@ def detect_timezone() -> str:
 # ---------------------------------------------------------------------------
 
 
-class MsalTokenCredential:
+class MsalTokenCredential(TokenCredential):
     """Bridges MSAL token cache -> azure.core.credentials for GraphServiceClient."""
 
     def __init__(self, client_id: str, cache_path: Path):
@@ -236,6 +239,9 @@ class MsalTokenCredential:
     def get_token(
         self,
         *scopes: str,
+        claims: str | None = None,
+        tenant_id: str | None = None,
+        enable_cae: bool = False,
         **kwargs: Any,
     ) -> AccessToken:
         accounts = self._app.get_accounts()
@@ -273,7 +279,7 @@ def get_graph_client(account: str | None = None) -> GraphServiceClient:
     credential = MsalTokenCredential(client_id, cache_path)
 
     try:
-        return GraphServiceClient(credentials=credential)  # type: ignore[arg-type]
+        return GraphServiceClient(credentials=credential)
     except AuthError as exc:
         _error_exit(str(exc))
 
@@ -379,19 +385,11 @@ def main(
 
 
 @app.command()
-def setup(
-    account: Optional[str] = typer.Option(
-        None,
-        "--account",
-        "-a",
-        help="Account name to set up.",
-    ),
-) -> None:
+def setup() -> None:
     """Authenticate with Microsoft Graph using device code flow."""
-    acct = account or state.account
-    acct = validate_account(acct)
+    acct = state.account
 
-    console.print(f"\n[bold blue]=== Outlook Setup ===[/bold blue]")
+    console.print("\n[bold blue]=== Outlook Setup ===[/bold blue]")
     console.print(f"Account: [green]{acct}[/green]\n")
 
     # Prompt for client_id
@@ -463,10 +461,10 @@ def setup(
     if "user_code" not in flow:
         _error_exit(f"Device flow initiation failed: {flow.get('error_description', 'unknown error')}")
 
-    console.print(f"[bold]To sign in:[/bold]")
+    console.print("[bold]To sign in:[/bold]")
     console.print(f"  1. Open: [cyan]{flow['verification_uri']}[/cyan]")
     console.print(f"  2. Enter code: [bold yellow]{flow['user_code']}[/bold yellow]")
-    console.print(f"\nWaiting for authentication...")
+    console.print("\nWaiting for authentication...")
 
     result = msal_app.acquire_token_by_device_flow(flow)
 
@@ -478,7 +476,7 @@ def setup(
     cache_path.write_text(cache.serialize())
     cache_path.chmod(0o600)
 
-    console.print(f"\n[bold green]=== Setup Complete ===[/bold green]")
+    console.print("\n[bold green]=== Setup Complete ===[/bold green]")
     console.print(f"Config saved to: {config_path}")
     console.print(f"Token cache saved to: {cache_path}")
     console.print(f"\nTest with: [cyan]uv run outlook.py token test --account {acct}[/cyan]")
@@ -490,22 +488,14 @@ def setup(
 
 
 @token_app.command()
-def test(
-    account: Optional[str] = typer.Option(
-        None,
-        "--account",
-        "-a",
-        help="Account name to test.",
-    ),
-) -> None:
+def test() -> None:
     """Test the connection by calling the /me endpoint."""
-    acct = account or state.account
+    acct = state.account
 
     try:
         client = get_graph_client(acct)
     except (SystemExit, AuthError) as exc:
         _error_exit(f"Failed to create Graph client: {exc}")
-        return  # unreachable, but satisfies type checker
 
     async def _test() -> dict:
         me = await client.me.get()
