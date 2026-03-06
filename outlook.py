@@ -149,10 +149,13 @@ def output_status(data: dict) -> None:
     if state.json_mode:
         print(json.dumps(data, indent=2, default=str))
         return
-    status = data.get("status", "info")
     msg = data.get("message", "")
-    style = "green" if status == "ok" else "red" if status == "error" else "blue"
-    console.print(Panel(f"[bold {style}]{msg}[/bold {style}]", border_style=style))
+    if not msg:
+        parts = [f"[bold]{k}:[/bold] {v}" for k, v in data.items()]
+        msg = "\n".join(parts)
+    status_val = str(data.get("status", "info"))
+    style = "red" if "error" in status_val or "fail" in status_val else "green"
+    console.print(Panel(msg, border_style=style))
 
 
 # ---------------------------------------------------------------------------
@@ -1539,7 +1542,7 @@ def bulk_read(
                 body.is_read = True
                 await client.me.messages.by_message_id(full_id).patch(body)
                 marked += 1
-            except (ValueError, Exception):
+            except Exception:
                 not_found += 1
         return marked, not_found
 
@@ -1571,7 +1574,7 @@ def bulk_delete(
                 body.destination_id = "deleteditems"
                 await client.me.messages.by_message_id(full_id).move.post(body)
                 deleted += 1
-            except (ValueError, Exception):
+            except Exception:
                 not_found += 1
         return deleted, not_found
 
@@ -1612,6 +1615,7 @@ def _save_rules(rules: list[dict]) -> None:
     rp = _rules_path()
     rp.parent.mkdir(parents=True, exist_ok=True)
     rp.write_text(json.dumps({"rules": rules}, indent=2) + "\n")
+    rp.chmod(0o600)
 
 
 @mail_app.command("rules")
