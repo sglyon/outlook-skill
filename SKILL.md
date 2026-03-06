@@ -1,31 +1,28 @@
 ---
 name: outlook
 description: Read, search, and manage Outlook emails and calendar via Microsoft Graph API. Use when the user asks about emails, inbox, Outlook, Microsoft mail, calendar events, or scheduling.
-version: 1.4.0
+version: 2.0.0
 author: jotamed
 ---
 
 # Outlook Skill
 
-Access Outlook/Hotmail email and calendar via Microsoft Graph API using OAuth2.
+Access Outlook/Hotmail email and calendar via Microsoft Graph API using OAuth2 device code flow.
 
-## Quick Setup (Automated)
+## Quick Setup
+
+Prerequisites: **Python >= 3.11**, **uv** installed.
 
 ```bash
-# Requires: Azure CLI, jq
-./scripts/outlook-setup.sh
+uv run outlook.py setup
 ```
 
-The setup script will:
-1. Log you into Azure (device code flow)
-2. Create an App Registration automatically
-3. Configure API permissions (Mail.ReadWrite, Mail.Send, Calendars.ReadWrite)
-4. Guide you through authorization
-5. Save credentials to `~/.outlook-mcp/`
+The setup command will:
+1. Prompt for your Entra ID Application (client) ID
+2. Initiate device code flow — open the URL shown and enter the code
+3. Authenticate and store MSAL token cache in `~/.outlook-mcp/`
 
-## Manual Setup
-
-See `references/setup.md` for step-by-step manual configuration via Azure Portal.
+No Azure CLI, curl, or jq required. See `references/setup.md` for the Entra ID app registration steps.
 
 ## Multiple Accounts
 
@@ -33,26 +30,26 @@ You can connect multiple Outlook accounts (personal, work, etc.):
 
 ### Setup additional accounts
 ```bash
-./scripts/outlook-setup.sh --account work
-./scripts/outlook-setup.sh --account personal
+uv run outlook.py --account work setup
+uv run outlook.py --account personal setup
 ```
 
 ### Use specific account
 ```bash
-./scripts/outlook-mail.sh --account work inbox
-./scripts/outlook-calendar.sh --account personal today
-./scripts/outlook-token.sh --account work refresh
+uv run outlook.py --account work mail inbox
+uv run outlook.py --account personal calendar today
+uv run outlook.py --account work token refresh
 ```
 
 ### Or use environment variable
 ```bash
 export OUTLOOK_ACCOUNT=work
-./scripts/outlook-mail.sh inbox
+uv run outlook.py mail inbox
 ```
 
 ### List configured accounts
 ```bash
-./scripts/outlook-token.sh list
+uv run outlook.py token list
 ```
 
 Credentials are stored separately:
@@ -60,164 +57,131 @@ Credentials are stored separately:
 ~/.outlook-mcp/
   default/
     config.json
-    credentials.json
+    msal_cache.json
   work/
-    config.json  
-    credentials.json
+    config.json
+    msal_cache.json
 ```
 
-Existing single-account setups are auto-migrated to `default`.
+If upgrading from shell scripts, re-run `uv run outlook.py setup` to re-authenticate via MSAL device code flow.
 
 ## Usage
 
+Command format: `uv run outlook.py [--json] [--account NAME] <group> <command> [args]`
+
 ### Token Management
 ```bash
-./scripts/outlook-token.sh refresh  # Refresh expired token
-./scripts/outlook-token.sh test     # Test connection
-./scripts/outlook-token.sh get      # Print access token
+uv run outlook.py token refresh          # Refresh expired token
+uv run outlook.py token test             # Test connection
+uv run outlook.py token list             # List configured accounts
 ```
 
 ### Reading Emails
 ```bash
-./scripts/outlook-mail.sh inbox [count]           # List latest emails (default: 10)
-./scripts/outlook-mail.sh unread [count]          # List unread emails
-./scripts/outlook-mail.sh search "query" [count]  # Search emails
-./scripts/outlook-mail.sh from <email> [count]    # List emails from sender
-./scripts/outlook-mail.sh read <id>               # Read email content
-./scripts/outlook-mail.sh attachments <id>        # List email attachments
+uv run outlook.py mail inbox [--count N]                # List latest emails (default: 10)
+uv run outlook.py mail unread [--count N]               # List unread emails
+uv run outlook.py mail search "query" [--count N]       # Search emails
+uv run outlook.py mail from <email> [--count N]         # List emails from sender
+uv run outlook.py mail read <id>                        # Read email content
+uv run outlook.py mail attachments <id>                 # List email attachments
+uv run outlook.py mail download <id> <filename> [dir]   # Download attachment
+uv run outlook.py mail focused [--count N]              # Focused inbox messages
+uv run outlook.py mail other [--count N]                # "Other" inbox messages
+uv run outlook.py mail thread <id>                      # Messages in same thread
+uv run outlook.py mail drafts [--count N]               # List draft messages
 ```
 
 ### Managing Emails
 ```bash
-./scripts/outlook-mail.sh mark-read <id>          # Mark as read
-./scripts/outlook-mail.sh mark-unread <id>        # Mark as unread
-./scripts/outlook-mail.sh flag <id>               # Flag as important
-./scripts/outlook-mail.sh unflag <id>             # Remove flag
-./scripts/outlook-mail.sh delete <id>             # Move to trash
-./scripts/outlook-mail.sh archive <id>            # Move to archive
-./scripts/outlook-mail.sh move <id> <folder>      # Move to folder
+uv run outlook.py mail mark-read <id>        # Mark as read
+uv run outlook.py mail mark-unread <id>      # Mark as unread
+uv run outlook.py mail flag <id>             # Flag as important
+uv run outlook.py mail unflag <id>           # Remove flag
+uv run outlook.py mail delete <id>           # Move to trash
+uv run outlook.py mail archive <id>          # Move to archive
+uv run outlook.py mail move <id> <folder>    # Move to folder
+uv run outlook.py mail categorize <id> <cat> # Assign category
+uv run outlook.py mail uncategorize <id> <cat>  # Remove category
+uv run outlook.py mail bulk-read <id1> <id2> ...   # Bulk mark as read
+uv run outlook.py mail bulk-delete <id1> <id2> ... # Bulk delete (requires confirmation)
 ```
 
 ### Sending Emails
 ```bash
-./scripts/outlook-mail.sh send <to> <subj> <body> # Send new email
-./scripts/outlook-mail.sh reply <id> "body"       # Reply to email
+uv run outlook.py mail send <to> <subject> <body>   # Send new email
+uv run outlook.py mail reply <id> <body>             # Reply to email
+uv run outlook.py mail forward <id> <to> [comment]   # Forward email
+uv run outlook.py mail draft <to> <subject> <body>   # Create draft
+uv run outlook.py mail send-draft <id>               # Send a draft
 ```
 
 ### Folders & Stats
 ```bash
-./scripts/outlook-mail.sh folders                 # List mail folders
-./scripts/outlook-mail.sh stats                   # Inbox statistics
+uv run outlook.py mail folders                  # List mail folders
+uv run outlook.py mail stats                    # Inbox statistics
+uv run outlook.py mail categories               # List Outlook categories
+uv run outlook.py mail create-folder <name>     # Create a mail folder
+uv run outlook.py mail delete-folder <name>     # Delete a mail folder
 ```
 
-### Auto-Categorize
+### Categories & Auto-Categorize
 ```bash
-./scripts/outlook-mail.sh rules                              # Show rules
-./scripts/outlook-mail.sh add-rule <field> <pattern> <cat>   # Add rule
-./scripts/outlook-mail.sh remove-rule <index>                # Remove rule
-./scripts/outlook-mail.sh auto-categorize [count]            # Apply rules
+uv run outlook.py mail rules                              # Show categorization rules
+uv run outlook.py mail add-rule <field> <pattern> <cat>    # Add rule
+uv run outlook.py mail remove-rule <index>                 # Remove rule
+uv run outlook.py mail auto-categorize [--count N]         # Apply rules to recent emails
 ```
 
 ## Calendar
 
 ### Viewing Events
 ```bash
-./scripts/outlook-calendar.sh events [count]      # List upcoming events
-./scripts/outlook-calendar.sh today               # Today's events
-./scripts/outlook-calendar.sh week                # This week's events
-./scripts/outlook-calendar.sh read <id>           # Event details
-./scripts/outlook-calendar.sh calendars           # List all calendars
-./scripts/outlook-calendar.sh free <start> <end>  # Check availability
+uv run outlook.py calendar events [--count N]           # List upcoming events
+uv run outlook.py calendar today                        # Today's events
+uv run outlook.py calendar week                         # This week's events
+uv run outlook.py calendar read <id>                    # Event details
+uv run outlook.py calendar calendars                    # List all calendars
+uv run outlook.py calendar free <start> <end>           # Check availability
 ```
 
 ### Creating Events
 ```bash
-./scripts/outlook-calendar.sh create <subj> <start> <end> [location]  # Create event
-./scripts/outlook-calendar.sh quick <subject> [time]                  # Quick 1-hour event
+uv run outlook.py calendar create <subject> <start> <end> [location]  # Create event
+uv run outlook.py calendar quick <subject> [time]                     # Quick 1-hour event
 ```
 
 ### Managing Events
 ```bash
-./scripts/outlook-calendar.sh update <id> <field> <value>  # Update (subject/location/start/end)
-./scripts/outlook-calendar.sh delete <id>                  # Delete event
+uv run outlook.py calendar update <id> <field> <value>  # Update (subject/location/start/end)
+uv run outlook.py calendar delete <id>                  # Delete event
 ```
 
 Date format: `YYYY-MM-DDTHH:MM` (e.g., `2026-01-26T10:00`)
 
-### Example Output
+## Global Options
 
-```bash
-$ ./scripts/outlook-mail.sh inbox 3
+| Flag | Description |
+|------|-------------|
+| `--json` | Output raw JSON instead of Rich tables. Recommended for agent/programmatic consumption. |
+| `--account NAME` | Use a specific account (default: `default`). Can also set `OUTLOOK_ACCOUNT` env var. |
 
-{
-  "n": 1,
-  "subject": "Your weekly digest",
-  "from": "digest@example.com",
-  "date": "2026-01-25T15:44",
-  "read": false,
-  "id": "icYY6QAIUE26PgAAAA=="
-}
-{
-  "n": 2,
-  "subject": "Meeting reminder",
-  "from": "calendar@outlook.com",
-  "date": "2026-01-25T14:06",
-  "read": true,
-  "id": "icYY6QAIUE26PQAAAA=="
-}
-
-$ ./scripts/outlook-mail.sh read "icYY6QAIUE26PgAAAA=="
-
-{
-  "subject": "Your weekly digest",
-  "from": { "name": "Digest", "address": "digest@example.com" },
-  "to": ["you@hotmail.com"],
-  "date": "2026-01-25T15:44:00Z",
-  "body": "Here's what happened this week..."
-}
-
-$ ./scripts/outlook-mail.sh stats
-
-{
-  "folder": "Inbox",
-  "total": 14098,
-  "unread": 2955
-}
-
-$ ./scripts/outlook-calendar.sh today
-
-{
-  "n": 1,
-  "subject": "Team standup",
-  "start": "2026-01-25T10:00",
-  "end": "2026-01-25T10:30",
-  "location": "Teams",
-  "id": "AAMkAGQ5NzE4YjQ3..."
-}
-
-$ ./scripts/outlook-calendar.sh create "Lunch with client" "2026-01-26T13:00" "2026-01-26T14:00" "Restaurant"
-
-{
-  "status": "event created",
-  "subject": "Lunch with client",
-  "start": "2026-01-26T13:00",
-  "end": "2026-01-26T14:00",
-  "id": "AAMkAGQ5NzE4YjQ3..."
-}
-```
+The `--json` flag outputs one JSON object per line to stdout, making it easy for agents to parse results programmatically.
 
 ## Token Refresh
 
-Access tokens expire after ~1 hour. Refresh with:
+MSAL handles token caching and refresh automatically. If you encounter auth errors, run:
 
 ```bash
-./scripts/outlook-token.sh refresh
+uv run outlook.py token refresh
 ```
 
 ## Files
 
-- `~/.outlook-mcp/config.json` - Client ID and secret
-- `~/.outlook-mcp/credentials.json` - OAuth tokens (access + refresh)
+- `outlook.py` - Single-file Python CLI (uses inline `uv` script dependencies)
+- `~/.outlook-mcp/` - Config directory
+  - `<account>/config.json` - Client ID
+  - `<account>/msal_cache.json` - MSAL token cache (access + refresh tokens)
+  - `<account>/rules.json` - Auto-categorization rules
 
 ## Permissions
 
@@ -235,20 +199,20 @@ Define rules to automatically categorize emails by sender or subject pattern:
 
 ```bash
 # Add rules
-./scripts/outlook-mail.sh add-rule from @github.com Dev
-./scripts/outlook-mail.sh add-rule from @linkedin.com Social
-./scripts/outlook-mail.sh add-rule subject invoice Finance
-./scripts/outlook-mail.sh subject receipt Finance
+uv run outlook.py mail add-rule from @github.com Dev
+uv run outlook.py mail add-rule from @linkedin.com Social
+uv run outlook.py mail add-rule subject invoice Finance
+uv run outlook.py mail add-rule subject receipt Finance
 
 # View current rules
-./scripts/outlook-mail.sh rules
+uv run outlook.py mail rules
 
 # Remove a rule by index
-./scripts/outlook-mail.sh remove-rule 0
+uv run outlook.py mail remove-rule 0
 
 # Apply rules to recent emails (default: 50)
-./scripts/outlook-mail.sh auto-categorize
-./scripts/outlook-mail.sh auto-categorize 100
+uv run outlook.py mail auto-categorize
+uv run outlook.py mail auto-categorize --count 100
 ```
 
 Rules are stored per-account in `~/.outlook-mcp/<account>/rules.json`. Multiple rules can match the same email, giving it multiple categories. Rules match case-insensitively and check if the pattern appears anywhere in the field.
@@ -277,20 +241,83 @@ If the user wants to make the categorization permanent, suggest adding a rule wi
 - **Email IDs**: The `id` field shows the last 20 characters of the full message ID. Use this ID with commands like `read`, `mark-read`, `delete`, etc.
 - **Numbered results**: Emails are numbered (n: 1, 2, 3...) for easy reference in conversation.
 - **Text extraction**: HTML email bodies are automatically converted to plain text.
-- **Token expiry**: Access tokens expire after ~1 hour. Run `outlook-token.sh refresh` when you see auth errors.
+- **Token handling**: MSAL manages token refresh automatically. Run `uv run outlook.py token refresh` if you see auth errors.
 - **Recent emails**: Commands like `read`, `mark-read`, etc. search the 100 most recent emails for the ID.
+- **JSON mode**: Use `--json` for machine-readable output on stdout. Rich tables go to stderr by default.
+
+### Example Output
+
+```bash
+$ uv run outlook.py --json mail inbox --count 3
+
+{
+  "n": 1,
+  "subject": "Your weekly digest",
+  "from": "digest@example.com",
+  "date": "2026-01-25T15:44",
+  "read": false,
+  "id": "icYY6QAIUE26PgAAAA=="
+}
+{
+  "n": 2,
+  "subject": "Meeting reminder",
+  "from": "calendar@outlook.com",
+  "date": "2026-01-25T14:06",
+  "read": true,
+  "id": "icYY6QAIUE26PQAAAA=="
+}
+
+$ uv run outlook.py --json mail read "icYY6QAIUE26PgAAAA=="
+
+{
+  "subject": "Your weekly digest",
+  "from": { "name": "Digest", "address": "digest@example.com" },
+  "to": ["you@hotmail.com"],
+  "date": "2026-01-25T15:44:00Z",
+  "body": "Here's what happened this week..."
+}
+
+$ uv run outlook.py --json mail stats
+
+{
+  "folder": "Inbox",
+  "total": 14098,
+  "unread": 2955
+}
+
+$ uv run outlook.py --json calendar today
+
+{
+  "n": 1,
+  "subject": "Team standup",
+  "start": "2026-01-25T10:00",
+  "end": "2026-01-25T10:30",
+  "location": "Teams",
+  "id": "AAMkAGQ5NzE4YjQ3..."
+}
+
+$ uv run outlook.py --json calendar create "Lunch with client" "2026-01-26T13:00" "2026-01-26T14:00" "Restaurant"
+
+{
+  "status": "event created",
+  "subject": "Lunch with client",
+  "start": "2026-01-26T13:00",
+  "end": "2026-01-26T14:00",
+  "id": "AAMkAGQ5NzE4YjQ3..."
+}
+```
 
 ## Troubleshooting
 
-**"Token expired"** → Run `outlook-token.sh refresh`
+**"Token expired"** -> Run `uv run outlook.py token refresh`
 
-**"Invalid grant"** → Token invalid, re-run setup: `outlook-setup.sh`
+**"Invalid grant"** -> Token invalid, re-run setup: `uv run outlook.py setup`
 
-**"Insufficient privileges"** → Check app permissions in Azure Portal → API Permissions
+**"Insufficient privileges"** -> Check app permissions in Entra ID -> API Permissions
 
-**"Message not found"** → The email may be older than 100 messages. Use search to find it first.
+**"Message not found"** -> The email may be older than 100 messages. Use search to find it first.
 
-**"Folder not found"** → Use exact folder name. Run `folders` to see available folders.
+**"Folder not found"** -> Use exact folder name. Run `uv run outlook.py mail folders` to see available folders.
 
 ## Supported Accounts
 
@@ -298,6 +325,25 @@ If the user wants to make the categorization permanent, suggest adding a rule wi
 - Work/School accounts (Microsoft 365) - may require admin consent
 
 ## Changelog
+
+### v2.0.0
+- **Rewrite**: Complete rewrite from shell scripts (bash/curl/jq) to Python single-file CLI
+  - Uses `uv run outlook.py` instead of `./scripts/outlook-*.sh`
+  - Built on `typer`, `msal`, `msgraph-sdk`, and `rich`
+  - Inline `uv` script dependencies -- no virtualenv or pip install needed
+  - MSAL device code flow replaces manual OAuth2 code exchange (no client secret needed)
+  - Token caching and refresh handled automatically by MSAL
+  - Rich table output by default, `--json` flag for machine-readable output
+  - Removed shell scripts: `outlook-setup.sh`, `outlook-token.sh`, `outlook-mail.sh`, `outlook-calendar.sh`
+- **Added**: `forward` command to forward emails
+- **Added**: `draft` / `drafts` / `send-draft` commands for draft management
+- **Added**: `focused` / `other` commands for Focused Inbox
+- **Added**: `thread` command to view conversation threads
+- **Added**: `categorize` / `uncategorize` commands
+- **Added**: `create-folder` / `delete-folder` commands
+- **Added**: `bulk-read` / `bulk-delete` commands
+- **Added**: `download` command for attachments
+- **Added**: `categories` command to list Outlook categories
 
 ### v1.4.0
 - **Feature**: Multi-account support
